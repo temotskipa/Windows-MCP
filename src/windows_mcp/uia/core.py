@@ -44,6 +44,7 @@ ProcessTime = time.perf_counter  # this returns nearly 0 when first call it if p
 ProcessTime()  # need to call it once if python version <= 3.6
 TreeNode = Any
 from .enums import *  # noqa: E402
+from .enums import _INPUTUnion
 
 
 class _AutomationClient:
