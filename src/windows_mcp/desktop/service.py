@@ -465,6 +465,16 @@ class Desktop:
                 else:
                     return response
 
+    def _check_app_exists(self, app_id: str) -> bool:
+        """Check if an app with the given AppID exists in shell:AppsFolder."""
+        safe_app_id = ps_quote(app_id)
+        command = (
+            f"$folder = (New-Object -ComObject Shell.Application).NameSpace('shell:AppsFolder'); "
+            f"if ($folder) {{ [bool]$folder.ParseName({safe_app_id}) }} else {{ $false }}"
+        )
+        response, status = self.execute_command(command)
+        return status == 0 and response.strip().lower() == "true"
+
     def launch_app(self, name: str) -> tuple[str, int, int]:
         apps_map = self.get_apps_from_start_menu()
         matched_app = process.extractOne(name, apps_map.keys(), score_cutoff=70)
@@ -484,10 +494,7 @@ class Desktop:
             if status == 0 and response.strip().isdigit():
                 pid = int(response.strip())
         else:
-            # Validate appid format (allow UWP IDs like Microsoft.WindowsNotepad_...!App)
-            # Chars to ignore for validation: \ , _ , . , - , !
-            validation_id = appid.replace("\\", "").replace("_", "").replace(".", "").replace("-", "").replace("!", "")
-            if not validation_id.isalnum():
+            if not self._check_app_exists(appid):
                 return (f"Invalid app identifier: {appid}", 1, 0)
             
             safe = ps_quote(f"shell:AppsFolder\\{appid}")
