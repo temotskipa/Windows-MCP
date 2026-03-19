@@ -129,8 +129,13 @@ def build_snapshot_response(
     screenshot_bytes = capture_result["screenshot_bytes"]
 
     metadata_text = f"Cursor Position: {desktop_state.cursor_position}\n"
-    if desktop_state.screenshot_size:
-        metadata_text += f"Screenshot Resolution: {desktop_state.screenshot_size.to_string()}\n"
+    if desktop_state.screenshot_original_size:
+        metadata_text += (
+            f"Screenshot Original Size: {desktop_state.screenshot_original_size.to_string()}"
+            " (the screenshot may be downscaled; multiply image coordinates by"
+            f" the ratio of original size to displayed size to get actual screen coordinates"
+            " for click, move and other mouse actions)\n"
+        )
     if desktop_state.screenshot_region:
         metadata_text += (
             f"Screenshot Region: {desktop_state.screenshot_region.xyxy_to_string()}\n"

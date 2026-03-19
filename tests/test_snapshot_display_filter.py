@@ -246,11 +246,11 @@ class TestDisplayFiltering:
             all_desktops=[{"name": "Desktop 1"}],
             active_window=None,
             windows=[],
-            screenshot_size=Size(width=1920, height=1080),
+            screenshot_original_size=Size(width=1920, height=1080),
             screenshot_region=make_box(1920, 0, 3840, 1080),
             screenshot_displays=[1],
         )
-        assert state.screenshot_size.to_string() == "(1920,1080)"
+        assert state.screenshot_original_size.to_string() == "(1920,1080)"
         assert state.screenshot_region.xyxy_to_string() == "(1920,0,3840,1080)"
         assert state.screenshot_displays == [1]
 
@@ -284,7 +284,7 @@ class TestDisplayFiltering:
         assert state.tree_state.root_node.bounding_box == desktop.tree.screen_box
         assert state.tree_state.interactive_nodes == []
         assert state.tree_state.scrollable_nodes == []
-        assert state.screenshot_size.to_string() == "(800,600)"
+        assert state.screenshot_original_size.to_string() == "(800,600)"
 
     def test_get_state_rejects_dom_without_ui_tree(self, desktop):
         desktop.tree = MagicMock()
@@ -334,7 +334,7 @@ class TestSnapshotTools:
             windows=[],
             screenshot=Image.new("RGB", (640, 480), "white"),
             cursor_position=(25, 30),
-            screenshot_size=Size(width=640, height=480),
+            screenshot_original_size=Size(width=640, height=480),
             screenshot_region=make_box(0, 0, 640, 480),
             screenshot_displays=[0],
             tree_state=TreeState(),

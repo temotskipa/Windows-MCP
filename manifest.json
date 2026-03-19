@@ -78,7 +78,7 @@
     },
     {
       "name": "Screenshot",
-      "description": "Captures a fast screenshot-first desktop snapshot with cursor position, active/open windows, and an image. Skips UI tree extraction for speed and should be the default first call when you mainly need visual context. Supports display=[0] or display=[0,1] to limit capture to specific screens."
+      "description": "Captures a fast screenshot-first desktop snapshot with cursor position, active/open windows, and an image. Skips UI tree extraction for speed and should be the default first call when you mainly need visual context. Supports display=[0] or display=[0,1] to limit capture to specific screens. Note: the returned image may be downscaled for efficiency; when it is, multiply image coordinates by the ratio of original size to displayed size to get the actual screen coordinates for mouse actions (Click, Move, etc.)."
     },
     {
       "name": "Snapshot",

@@ -220,7 +220,7 @@ class Desktop:
             region_filter_ms = (perf_counter() - stage_started_at) * 1000
             stage_started_at = perf_counter()
 
-        screenshot_size = None
+        screenshot_original_size = None
         if use_vision:
             if use_annotation:
                 nodes = tree_state.interactive_nodes
@@ -232,6 +232,8 @@ class Desktop:
                 )
             else:
                 screenshot = self.get_screenshot(capture_rect=capture_rect)
+
+            screenshot_original_size = Size(width=screenshot.width, height=screenshot.height)
 
             if profile_enabled:
                 screenshot_capture_ms = (perf_counter() - stage_started_at) * 1000
@@ -260,8 +262,6 @@ class Desktop:
                 screenshot_resize_ms = (perf_counter() - stage_started_at) * 1000
                 stage_started_at = perf_counter()
 
-            screenshot_size = Size(width=screenshot.width, height=screenshot.height)
-
             if as_bytes:
                 buffered = io.BytesIO()
                 screenshot.save(buffered, format="PNG", optimize=True, compress_level=6)
@@ -277,7 +277,7 @@ class Desktop:
             all_desktops=all_desktops,
             screenshot=screenshot,
             cursor_position=cursor_position,
-            screenshot_size=screenshot_size,
+            screenshot_original_size=screenshot_original_size,
             screenshot_region=screenshot_region,
             screenshot_displays=display_indices,
             tree_state=tree_state,
