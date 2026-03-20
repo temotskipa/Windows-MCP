@@ -381,6 +381,10 @@ class Desktop:
             )
             encoded = base64.b64encode(utf8_command.encode("utf-16le")).decode("ascii")
             env = os.environ.copy()
+            # NO_COLOR suppresses ANSI escape sequences in pwsh 7.2+ (and many other CLI tools).
+            # PS5.1 has no ANSI output, so this is harmlessly ignored there.
+            # https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_ansi_terminals#disabling-ansi-output
+            env["NO_COLOR"] = "1"
 
             # Rebuild PATH and PATHEXT from registry so system executables (e.g. OpenSSH at
             # C:\Windows\System32\OpenSSH) are discoverable without requiring absolute paths.
