@@ -167,3 +167,4 @@ cython_debug/
 sandbox
 *.ipynb
 *.mcpb
+.idea/
