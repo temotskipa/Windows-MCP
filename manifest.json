@@ -17,7 +17,8 @@
     "assets/screenshots/screenshot_3.png"
   ],
   "server": {
-    "type": "uv",
+    "type": "python",
+    "entry_point": "src/windows_mcp/__main__.py",
     "mcp_config": {
       "command": "uv",
       "args": [
@@ -68,11 +69,11 @@
       "description": "Manages Windows applications with three modes: 'launch' (opens the prescibed application), 'resize' (adjusts the size/position of a named window or the active window if name is omitted), 'switch' (brings specific window into focus)."
     },
     {
-      "name": "Shell",
+      "name": "PowerShell",
       "description": "A comprehensive system tool for executing any PowerShell commands. Use it to navigate the file system, manage files and processes, and execute system-level operations. Capable of accessing web content, interacting with network resources, and performing complex administrative tasks."
     },
     {
-      "name": "File",
+      "name": "FileSystem",
       "description": "Manages file system operations with eight modes: 'read' (read text file contents), 'write' (create/overwrite/append to files), 'copy' (copy files or directories), 'move' (move or rename), 'delete' (delete files or directories), 'list' (list directory contents), 'search' (find files by glob pattern), 'info' (get metadata like size, dates, type). Relative paths are resolved from the user's Desktop folder. Use absolute paths to access other locations."
     },
     {
