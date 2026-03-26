@@ -13,10 +13,28 @@ import os
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
+_COMTYPES_ORD_TYPEERROR_FRAGMENT = "ord() expected a character"
+_COMTYPES_AUTOMATION_PATH_FRAGMENT = "comtypes/automation.py"
+
 
 def _snapshot_profile_enabled() -> bool:
     value = os.getenv("WINDOWS_MCP_PROFILE_SNAPSHOT", "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _is_comtypes_variant_ord_typeerror(error: TypeError) -> bool:
+    message = str(error)
+    if _COMTYPES_ORD_TYPEERROR_FRAGMENT not in message:
+        return False
+
+    traceback_ref = error.__traceback__
+    while traceback_ref is not None:
+        filename = traceback_ref.tb_frame.f_code.co_filename.replace("\\", "/").lower()
+        if filename.endswith(_COMTYPES_AUTOMATION_PATH_FRAGMENT):
+            return True
+        traceback_ref = traceback_ref.tb_next
+
+    return False
 
 if TYPE_CHECKING:
     from windows_mcp.desktop.service import Desktop
@@ -538,40 +556,59 @@ class Tree:
             
             # Recursively traverse the tree the right to left for normal apps and for DOM traverse from left to right
             for child in (children if is_dom else reversed(children)):
-                # Incrementally building the xpath
-                
-                # Check if the child is a DOM element
-                if is_browser and child.CachedAutomationId=="RootWebArea":
-                    bounding_box=child.CachedBoundingRectangle
-                    self.dom_bounding_box=BoundingBox(left=bounding_box.left,top=bounding_box.top,
-                    right=bounding_box.right,bottom=bounding_box.bottom,width=bounding_box.width(),
-                    height=bounding_box.height())
-                    self.dom=child
-                    # enter DOM subtree
-                    self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=True, is_dialog=is_dialog, element_cache_req=element_cache_req, children_cache_req=children_cache_req)
-                # Check if the child is a dialog
-                elif isinstance(child,WindowControl):
-                    if not child.CachedIsOffscreen:
-                        if is_dom:
-                            bounding_box=child.CachedBoundingRectangle
-                            if bounding_box.width() > 0.8*self.dom_bounding_box.width:
-                                # Because this window element covers the majority of the screen
-                                dom_interactive_nodes.clear()
-                        else:
-                            # Inline is_window_modal
-                            is_modal = False
-                            try:
-                                is_modal = child.GetCachedPropertyValue(PropertyId.WindowIsModalProperty)
-                            except Exception:
+                try:
+                    # Check if the child is a DOM element
+                    if is_browser and child.CachedAutomationId=="RootWebArea":
+                        bounding_box=child.CachedBoundingRectangle
+                        self.dom_bounding_box=BoundingBox(left=bounding_box.left,top=bounding_box.top,
+                        right=bounding_box.right,bottom=bounding_box.bottom,width=bounding_box.width(),
+                        height=bounding_box.height())
+                        self.dom=child
+                        # enter DOM subtree
+                        self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=True, is_dialog=is_dialog, element_cache_req=element_cache_req, children_cache_req=children_cache_req)
+                    # Check if the child is a dialog
+                    elif isinstance(child,WindowControl):
+                        if not child.CachedIsOffscreen:
+                            if is_dom:
+                                bounding_box=child.CachedBoundingRectangle
+                                if bounding_box.width() > 0.8*self.dom_bounding_box.width:
+                                    # Because this window element covers the majority of the screen
+                                    dom_interactive_nodes.clear()
+                            else:
+                                # Inline is_window_modal
                                 is_modal = False
-                                
-                            if is_modal:
-                                interactive_nodes.clear()
-                    # enter dialog subtree
-                    self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=is_dom, is_dialog=True, element_cache_req=element_cache_req, children_cache_req=children_cache_req)
-                else:
-                    # normal non-dialog children
-                    self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=is_dom, is_dialog=is_dialog, element_cache_req=element_cache_req, children_cache_req=children_cache_req)
+                                try:
+                                    is_modal = child.GetCachedPropertyValue(PropertyId.WindowIsModalProperty)
+                                except Exception:
+                                    is_modal = False
+                                    
+                                if is_modal:
+                                    interactive_nodes.clear()
+                        # enter dialog subtree
+                        self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=is_dom, is_dialog=True, element_cache_req=element_cache_req, children_cache_req=children_cache_req)
+                    else:
+                        # normal non-dialog children
+                        self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=is_dom, is_dialog=is_dialog, element_cache_req=element_cache_req, children_cache_req=children_cache_req)
+                except TypeError as e:
+                    if not _is_comtypes_variant_ord_typeerror(e):
+                        raise
+
+                    logger.warning(
+                        "Skipping UI element in '%s' due to comtypes VARIANT marshaling TypeError: %s",
+                        window_name,
+                        e,
+                    )
+                    continue
+        except TypeError as e:
+            if not _is_comtypes_variant_ord_typeerror(e):
+                logger.error(f"Error in tree_traversal: {e}", exc_info=True)
+                raise
+
+            logger.warning(
+                "Skipping subtree in '%s' due to comtypes VARIANT marshaling TypeError: %s",
+                window_name,
+                e,
+            )
         except Exception as e:
             logger.error(f"Error in tree_traversal: {e}", exc_info=True)
             raise

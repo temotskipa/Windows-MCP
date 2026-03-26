@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock
 import pytest
 from windows_mcp.desktop.views import Size
-from windows_mcp.tree.service import Tree
+from windows_mcp.tree.service import Tree, _is_comtypes_variant_ord_typeerror
 from windows_mcp.uia import Rect
 
 
@@ -74,3 +74,30 @@ class TestIouBoundingBox:
         assert result.bottom == 1080
         assert result.width == 20
         assert result.height == 20
+
+
+def _type_error_from(filename: str) -> TypeError:
+    namespace = {}
+    code = compile("def trigger():\n    ord('hello')\n", filename, "exec")
+    exec(code, namespace)
+
+    with pytest.raises(TypeError) as exc_info:
+        namespace["trigger"]()
+
+    return exc_info.value
+
+
+class TestComtypesVariantOrdTypeError:
+    def test_matches_comtypes_automation_traceback(self):
+        error = _type_error_from(
+            "C:/Python313/Lib/site-packages/comtypes/automation.py",
+        )
+
+        assert _is_comtypes_variant_ord_typeerror(error) is True
+
+    def test_rejects_same_message_from_non_comtypes_traceback(self):
+        error = _type_error_from(
+            "C:/QA_Automation/Windows-MCP-PR/tests/helpers/fake_source.py",
+        )
+
+        assert _is_comtypes_variant_ord_typeerror(error) is False
