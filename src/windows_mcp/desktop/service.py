@@ -2,8 +2,8 @@ from windows_mcp.desktop.utils import (
     ps_quote,
     ps_quote_for_xml,
     resolve_known_folder_guid_path,
-    run_with_graceful_timeout
 )
+from windows_mcp.desktop.powershell import PowerShellExecutor
 from windows_mcp.vdm.core import (
     get_all_desktops,
     get_current_desktop,
@@ -23,15 +23,12 @@ from fuzzywuzzy import process
 from time import sleep, time, perf_counter
 from psutil import Process
 import win32process
-import subprocess
 import win32gui
 import win32con
 import requests
 import logging
-import base64
 import random
 import ctypes
-import shutil
 import csv
 import re
 import os
@@ -330,7 +327,7 @@ class Desktop:
     def get_apps_from_start_menu(self) -> dict[str, str]:
         """Get installed apps. Tries Get-StartApps first, falls back to shortcut scanning."""
         command = "Get-StartApps | ConvertTo-Csv -NoTypeInformation"
-        apps_info, status = self.execute_command(command)
+        apps_info, status = PowerShellExecutor.execute_command(command)
 
         if status == 0 and apps_info and apps_info.strip():
             try:
@@ -374,77 +371,7 @@ class Desktop:
         return apps
 
     def execute_command(self, command: str, timeout: int = 10, shell: str | None = None) -> tuple[str, int]:
-        try:
-            # $OutputEncoding: controls how PS5.1 encodes output written to its stdout pipe.
-            # Without this set to UTF-8, PS5.1 uses the system codepage and native process
-            # stdout is silently lost when Python reads the pipe.
-            # [Console]::OutputEncoding: controls how PS decodes bytes from native exe stdout.
-            utf8_command = (
-                "$OutputEncoding = [System.Text.Encoding]::UTF8; "
-                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-                f"{command}"
-            )
-            encoded = base64.b64encode(utf8_command.encode("utf-16le")).decode("ascii")
-            env = os.environ.copy()
-            # NO_COLOR suppresses ANSI escape sequences in pwsh 7.2+ (and many other CLI tools).
-            # PS5.1 has no ANSI output, so this is harmlessly ignored there.
-            # https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_ansi_terminals#disabling-ansi-output
-            env["NO_COLOR"] = "1"
-
-            # Rebuild PATH and PATHEXT from registry so system executables (e.g. OpenSSH at
-            # C:\Windows\System32\OpenSSH) are discoverable without requiring absolute paths.
-            # The inherited env may be stripped down by venv activation or the MCP host.
-            try:
-                import winreg
-
-                with winreg.OpenKey(
-                    winreg.HKEY_LOCAL_MACHINE,
-                    r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
-                ) as machine_key:
-                    machine_path = winreg.QueryValueEx(machine_key, "PATH")[0]
-                    if ".EXE" not in env.get("PATHEXT", ""):
-                        env["PATHEXT"] = winreg.QueryValueEx(machine_key, "PATHEXT")[0]
-
-                try:
-                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as user_key:
-                        user_path = winreg.QueryValueEx(user_key, "PATH")[0]
-                except FileNotFoundError:
-                    user_path = ""
-
-                env["PATH"] = ";".join(filter(None, [machine_path, user_path, env.get("PATH", "")]))
-            except Exception:
-                if ".EXE" not in env.get("PATHEXT", ""):
-                    env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.CPL;.PY;.PYW"
-
-            shell = shell or ("pwsh" if shutil.which("pwsh") else "powershell")
-
-            args = [shell, "-NoProfile"]
-            # Only older Windows PowerShell (5.1) uses -OutputFormat Text successfully here
-            shell_name = os.path.basename(shell).lower().replace(".exe", "")
-            if shell_name == "powershell":
-                args.extend(["-OutputFormat", "Text"])
-            args.extend(["-EncodedCommand", encoded])
-
-            result = run_with_graceful_timeout(
-                args,
-                stdin=subprocess.DEVNULL,  # Prevent child processes from inheriting the MCP pipe stdin
-                capture_output=True,  # No errors='ignore' - let subprocess return bytes
-                timeout=timeout,
-                cwd=os.path.expanduser(path="~"),
-                env=env,
-            )
-            # Handle both bytes and str output (subprocess behavior varies by environment)
-            stdout = result.stdout
-            stderr = result.stderr
-            if isinstance(stdout, bytes):
-                stdout = stdout.decode("utf-8", errors="replace")
-            if isinstance(stderr, bytes):
-                stderr = stderr.decode("utf-8", errors="replace")
-            return (stdout or stderr, result.returncode)
-        except subprocess.TimeoutExpired:
-            return ("Command execution timed out", 1)
-        except Exception as e:
-            return (f"Command execution failed: {type(e).__name__}: {e}", 1)
+        return PowerShellExecutor.execute_command(command, timeout, shell)
 
     def is_window_browser(self, node: uia.Control):
         """Give any node of the app and it will return True if the app is a browser, False otherwise."""
@@ -456,7 +383,7 @@ class Desktop:
 
     def get_default_language(self) -> str:
         command = "Get-Culture | Select-Object Name,DisplayName | ConvertTo-Csv -NoTypeInformation"
-        response, _ = self.execute_command(command)
+        response, _ = PowerShellExecutor.execute_command(command)
         reader = csv.DictReader(io.StringIO(response))
         return "".join([row.get("DisplayName") for row in reader])
 
@@ -576,7 +503,7 @@ class Desktop:
             f"$folder = (New-Object -ComObject Shell.Application).NameSpace('shell:AppsFolder'); "
             f"if ($folder) {{ [bool]$folder.ParseName({safe_app_id}) }} else {{ $false }}"
         )
-        response, status = self.execute_command(command)
+        response, status = PowerShellExecutor.execute_command(command)
         return status == 0 and response.strip().lower() == "true"
 
     def launch_app(self, name: str) -> tuple[str, int, int]:
@@ -594,7 +521,7 @@ class Desktop:
             exe_path = resolve_known_folder_guid_path(appid)
             safe_exe_path = ps_quote(exe_path)
             command = f"Start-Process {safe_exe_path} -PassThru | Select-Object -ExpandProperty Id"
-            response, status = self.execute_command(command)
+            response, status = PowerShellExecutor.execute_command(command)
             if status == 0 and response.strip().isdigit():
                 pid = int(response.strip())
         else:
@@ -603,7 +530,7 @@ class Desktop:
 
             safe = ps_quote(f"shell:AppsFolder\\{appid}")
             command = f"Start-Process {safe}"
-            response, status = self.execute_command(command)
+            response, status = PowerShellExecutor.execute_command(command)
 
         return response, status, pid
 
@@ -1041,13 +968,13 @@ class Desktop:
 
 
     def get_windows_version(self) -> str:
-        response, status = self.execute_command("(Get-CimInstance Win32_OperatingSystem).Caption")
+        response, status = PowerShellExecutor.execute_command("(Get-CimInstance Win32_OperatingSystem).Caption")
         if status == 0:
             return response.strip()
         return "Windows"
 
     def get_user_account_type(self) -> str:
-        response, status = self.execute_command(
+        response, status = PowerShellExecutor.execute_command(
             "(Get-LocalUser -Name $env:USERNAME).PrincipalSource"
         )
         return (
@@ -1440,7 +1367,7 @@ class Desktop:
             "$notifier.Show($toast)"
         )
         # Use Windows PowerShell (5.1) explicitly because the WinRT toast APIs are not available in PowerShell 7+ (pwsh).
-        response, status = self.execute_command(ps_script, shell="powershell")
+        response, status = PowerShellExecutor.execute_command(ps_script, shell="powershell")
         if status == 0:
             return f'Notification sent: "{title}" - {message}'
         else:
@@ -1534,7 +1461,7 @@ class Desktop:
         q_path = ps_quote(path)
         q_name = ps_quote(name)
         command = f"Get-ItemProperty -Path {q_path} -Name {q_name} | Select-Object -ExpandProperty {q_name}"
-        response, status = self.execute_command(command)
+        response, status = PowerShellExecutor.execute_command(command)
         if status != 0:
             return f'Error reading registry: {response.strip()}'
         return f'Registry value [{path}] "{name}" = {response.strip()}'
@@ -1550,7 +1477,7 @@ class Desktop:
             f"if (-not (Test-Path {q_path})) {{ New-Item -Path {q_path} -Force | Out-Null }}; "
             f"Set-ItemProperty -Path {q_path} -Name {q_name} -Value {q_value} -Type {reg_type} -Force"
         )
-        response, status = self.execute_command(command)
+        response, status = PowerShellExecutor.execute_command(command)
         if status != 0:
             return f'Error writing registry: {response.strip()}'
         return f'Registry value [{path}] "{name}" set to "{value}" (type: {reg_type}).'
@@ -1560,13 +1487,13 @@ class Desktop:
         if name:
             q_name = ps_quote(name)
             command = f"Remove-ItemProperty -Path {q_path} -Name {q_name} -Force"
-            response, status = self.execute_command(command)
+            response, status = PowerShellExecutor.execute_command(command)
             if status != 0:
                 return f'Error deleting registry value: {response.strip()}'
             return f'Registry value [{path}] "{name}" deleted.'
         else:
             command = f"Remove-Item -Path {q_path} -Recurse -Force"
-            response, status = self.execute_command(command)
+            response, status = PowerShellExecutor.execute_command(command)
             if status != 0:
                 return f'Error deleting registry key: {response.strip()}'
             return f'Registry key [{path}] deleted.'
@@ -1582,7 +1509,7 @@ class Desktop:
             f"if ($subkeys) {{ Write-Output \"`nSub-Keys:`n$subkeys\" }}; "
             f"if (-not $values -and -not $subkeys) {{ Write-Output 'No values or sub-keys found.' }}"
         )
-        response, status = self.execute_command(command)
+        response, status = PowerShellExecutor.execute_command(command)
         if status != 0:
             return f'Error listing registry: {response.strip()}'
         return f'Registry key [{path}]:\n{response.strip()}'

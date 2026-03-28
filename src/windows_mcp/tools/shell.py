@@ -2,6 +2,7 @@
 
 from mcp.types import ToolAnnotations
 from windows_mcp.analytics import with_analytics
+from windows_mcp.desktop.powershell import PowerShellExecutor
 from fastmcp import Context
 
 
@@ -20,7 +21,7 @@ def register(mcp, *, get_desktop, get_analytics):
     @with_analytics(get_analytics(), "Powershell-Tool")
     def powershell_tool(command: str, timeout: int = 30, ctx: Context = None) -> str:
         try:
-            response, status_code = get_desktop().execute_command(command, timeout)
+            response, status_code = PowerShellExecutor.execute_command(command, timeout)
             return f"Response: {response}\nStatus Code: {status_code}"
         except Exception as e:
             return f"Error executing command: {str(e)}\nStatus Code: 1"
