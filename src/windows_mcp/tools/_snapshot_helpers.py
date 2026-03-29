@@ -20,6 +20,19 @@ logger = logging.getLogger(__name__)
 MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT = 1920, 1080
 
 
+def _screenshot_scale() -> float:
+    value = os.getenv("WINDOWS_MCP_SCREENSHOT_SCALE", "1.0")
+    try:
+        scale = float(value)
+    except ValueError:
+        logger.warning("Invalid WINDOWS_MCP_SCREENSHOT_SCALE value %r, using 1.0", value)
+        scale = 1.0
+    if not (0.1 <= scale <= 1.0):
+        logger.warning("WINDOWS_MCP_SCREENSHOT_SCALE %r out of range [0.1, 1.0], clamping", scale)
+        scale = max(0.1, min(1.0, scale))
+    return scale
+
+
 def _snapshot_profile_enabled() -> bool:
     value = os.getenv("WINDOWS_MCP_PROFILE_SNAPSHOT", "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
@@ -63,6 +76,7 @@ def capture_desktop_state(
         use_annotation=use_annotation,
         use_ui_tree=use_ui_tree,
         as_bytes=False,
+        scale=_screenshot_scale(),
         grid_lines=grid_lines,
         display_indices=display_indices,
         max_image_size=Size(width=MAX_IMAGE_WIDTH, height=MAX_IMAGE_HEIGHT),

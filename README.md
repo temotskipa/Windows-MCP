@@ -335,7 +335,7 @@ uvx windows-mcp --transport sse --host localhost --port 8000
 uvx windows-mcp --transport streamable-http --host localhost --port 8000
 ```
 
-No additional environment variables are needed. The MCP client connects directly to the server.
+Optional environment variables can be set to customize behavior — see [Environment Variables](#-environment-variables) below.
 
 ### Remote Mode
 
@@ -378,6 +378,55 @@ When installed as a desktop extension, remote mode should stay on that lightweig
 | `stdio` (default) | `--transport stdio` | Direct connection from MCP clients like Claude Desktop, Cursor, etc. |
 | `sse` | `--transport sse --host HOST --port PORT` | Network-accessible via Server-Sent Events |
 | `streamable-http` | `--transport streamable-http --host HOST --port PORT` | Network-accessible via HTTP streaming (recommended for production) |
+
+---
+
+## ⚙️ Environment Variables
+
+All variables are optional unless noted. Set them via the `env` key in `claude_desktop_config.json` (or your MCP client's equivalent config).
+
+### Screenshot & Snapshot
+
+| Variable | Default | Description |
+|---|---|---|
+| `WINDOWS_MCP_SCREENSHOT_SCALE` | `1.0` | Scale factor applied to screenshots before encoding. Accepts a float in the range `0.1`–`1.0`. Useful on high-resolution displays (1440p, 4K) where the default produces images that exceed Claude Desktop's 1 MB tool-result limit. Set to `0.5` to halve both dimensions (quarter the file size). |
+| `WINDOWS_MCP_SCREENSHOT_BACKEND` | `auto` | Screenshot capture backend. Accepted values: `auto` (tries dxcam → mss → pillow in order), `dxcam`, `mss`, `pillow`. Use `mss` or `pillow` if `dxcam` is unavailable or causes issues on your GPU. |
+| `WINDOWS_MCP_PROFILE_SNAPSHOT` | _(disabled)_ | Set to `1`, `true`, `yes`, or `on` to emit per-stage timing logs for Screenshot/Snapshot calls. Useful for diagnosing slow captures. |
+
+### Telemetry
+
+| Variable | Default | Description |
+|---|---|---|
+| `ANONYMIZED_TELEMETRY` | `true` | Set to `false` to disable anonymous usage telemetry. No personal data, tool arguments, or outputs are ever collected regardless of this setting. |
+
+### Remote Mode
+
+| Variable | Default | Description |
+|---|---|---|
+| `MODE` | `local` | Set to `remote` to run as a proxy to [windowsmcp.io](https://windowsmcp.io). |
+| `SANDBOX_ID` | _(none)_ | **Required for remote mode.** The sandbox/VM identifier from the dashboard. |
+| `API_KEY` | _(none)_ | **Required for remote mode.** Your Windows-MCP API key. |
+
+**Example `claude_desktop_config.json` with all local-mode options:**
+
+```json
+{
+  "mcpServers": {
+    "windows-mcp": {
+      "command": "uvx",
+      "args": [
+        "windows-mcp"
+      ],
+      "env": {
+        "WINDOWS_MCP_SCREENSHOT_SCALE": "0.5",
+        "WINDOWS_MCP_SCREENSHOT_BACKEND": "auto",
+        "WINDOWS_MCP_PROFILE_SNAPSHOT": "false",
+        "ANONYMIZED_TELEMETRY": "true"
+      }
+    }
+  }
+}
+```
 
 ---
 
@@ -440,7 +489,7 @@ Please read our [Security Policy](SECURITY.md).
 
 Windows-MCP collects usage data to help improve the MCP server. No personal information, no tool arguments, no outputs are tracked.
 
-To disable telemetry, add the following to your MCP client configuration:
+To disable telemetry, set `ANONYMIZED_TELEMETRY` to `false` in your MCP client configuration:
 
 ```json
 {
@@ -457,6 +506,8 @@ To disable telemetry, add the following to your MCP client configuration:
   }
 }
 ```
+
+See the [Environment Variables](#-environment-variables) section for the full list of configurable options.
 
 For detailed information on what data is collected and how it is handled, please refer to the [Telemetry and Data Privacy](SECURITY.md#telemetry-and-data-privacy) section in our Security Policy.
 

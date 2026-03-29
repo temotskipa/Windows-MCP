@@ -55,6 +55,18 @@ The codebase follows a layered service architecture under `src/windows_mcp/`:
 - UI element fetching has retry logic (`THREAD_MAX_RETRIES=3` in tree service)
 - The server supports stdio, SSE, and streamable HTTP transports
 
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `WINDOWS_MCP_SCREENSHOT_SCALE` | `1.0` | Scale factor for screenshots (range `0.1`–`1.0`). Lower on 1440p/4K to stay under Claude Desktop's 1 MB limit. Resolved in `tools/_snapshot_helpers.py`. |
+| `WINDOWS_MCP_SCREENSHOT_BACKEND` | `auto` | Screenshot backend: `auto`, `dxcam`, `mss`, `pillow`. Resolved in `desktop/screenshot.py`. |
+| `WINDOWS_MCP_PROFILE_SNAPSHOT` | _(off)_ | Set to `1`/`true`/`yes`/`on` to log per-stage timing for Screenshot/Snapshot. Checked in `tools/_snapshot_helpers.py` and `desktop/service.py`. |
+| `ANONYMIZED_TELEMETRY` | `true` | Set to `false` to disable PostHog telemetry. Checked in `__main__.py` and `analytics.py`. |
+| `MODE` | `local` | `local` or `remote`. Remote mode proxies to windowsmcp.io. |
+| `SANDBOX_ID` | _(none)_ | Required in remote mode — VM identifier from dashboard. |
+| `API_KEY` | _(none)_ | Required in remote mode — Windows-MCP API key. |
+
 ## Security Context
 
 This server has **full system access** with no sandboxing. Tools like Shell and App can perform irreversible operations. The recommended deployment target is a VM or Windows Sandbox.
