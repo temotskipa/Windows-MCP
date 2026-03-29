@@ -31,7 +31,9 @@
         "ANONYMIZED_TELEMETRY": "${user_config.anonymized_telemetry}",
         "MODE": "${user_config.mode}",
         "SANDBOX_ID": "${user_config.sandbox_id}",
-        "API_KEY": "${user_config.api_key}"
+        "API_KEY": "${user_config.api_key}",
+        "WINDOWS_MCP_PROFILE_SNAPSHOT": "${user_config.profile_snapshot}",
+        "WINDOWS_MCP_SCREENSHOT_BACKEND": "${user_config.screenshot_backend}"
       }
     }
   },
@@ -61,6 +63,26 @@
       "description": "Windows-MCP collects basic usage data to help improve the MCP server. No personal information, tool arguments, or tool outputs are tracked.",
       "required": false,
       "default": true
+    },
+    "profile_snapshot": {
+      "type": "boolean",
+      "title": "Profile Snapshot Performance",
+      "description": "Enable detailed performance logging for desktop snapshots and screenshots in the server console/logs. Useful for troubleshooting latency.",
+      "required": false,
+      "default": false
+    },
+    "screenshot_backend": {
+      "type": "string",
+      "title": "Screenshot Backend",
+      "description": "The engine used to capture screenshots. 'auto' automatically selects the fastest available backend (DXGI -> MSS -> Pillow). Use 'pillow' if you encounter capture issues.",
+      "required": false,
+      "default": "auto",
+      "enum": [
+        "auto",
+        "dxcam",
+        "mss",
+        "pillow"
+      ]
     }
   },
   "tools": [
