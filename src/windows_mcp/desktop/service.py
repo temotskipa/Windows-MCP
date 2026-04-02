@@ -25,6 +25,7 @@ from psutil import Process
 import win32process
 import win32gui
 import win32con
+import winreg
 import requests
 import logging
 import random
@@ -1457,62 +1458,130 @@ class Desktop:
 
 
 
-    def registry_get(self, path: str, name: str) -> str:
-        q_path = ps_quote(path)
-        q_name = ps_quote(name)
-        command = f"Get-ItemProperty -Path {q_path} -Name {q_name} | Select-Object -ExpandProperty {q_name}"
-        response, status = PowerShellExecutor.execute_command(command)
-        if status != 0:
-            return f'Error reading registry: {response.strip()}'
-        return f'Registry value [{path}] "{name}" = {response.strip()}'
+    def _parse_reg_path(self, path: str):
+        """Helper to parse a PowerShell-style registry path into (HKEY, subkey)."""
+        parts = path.split(":\\", 1)
+        if len(parts) != 2:
+            raise ValueError(f"Invalid registry path format: {path}")
 
-    def registry_set(self, path: str, name: str, value: str, reg_type: str = 'String') -> str:
-        q_path = ps_quote(path)
-        q_name = ps_quote(name)
-        q_value = ps_quote(value)
-        allowed_types = {"String", "ExpandString", "Binary", "DWord", "MultiString", "QWord"}
-        if reg_type not in allowed_types:
-            return f"Error: invalid registry type '{reg_type}'. Allowed: {', '.join(sorted(allowed_types))}"
-        command = (
-            f"if (-not (Test-Path {q_path})) {{ New-Item -Path {q_path} -Force | Out-Null }}; "
-            f"Set-ItemProperty -Path {q_path} -Name {q_name} -Value {q_value} -Type {reg_type} -Force"
-        )
-        response, status = PowerShellExecutor.execute_command(command)
-        if status != 0:
-            return f'Error writing registry: {response.strip()}'
-        return f'Registry value [{path}] "{name}" set to "{value}" (type: {reg_type}).'
+        drive, subkey = parts
+        drive = drive.upper()
+
+        mapping = {
+            "HKLM": winreg.HKEY_LOCAL_MACHINE,
+            "HKEY_LOCAL_MACHINE": winreg.HKEY_LOCAL_MACHINE,
+            "HKCU": winreg.HKEY_CURRENT_USER,
+            "HKEY_CURRENT_USER": winreg.HKEY_CURRENT_USER,
+            "HKCR": winreg.HKEY_CLASSES_ROOT,
+            "HKEY_CLASSES_ROOT": winreg.HKEY_CLASSES_ROOT,
+            "HKU": winreg.HKEY_USERS,
+            "HKEY_USERS": winreg.HKEY_USERS,
+            "HKCC": winreg.HKEY_CURRENT_CONFIG,
+            "HKEY_CURRENT_CONFIG": winreg.HKEY_CURRENT_CONFIG,
+        }
+
+        if drive not in mapping:
+            raise ValueError(f"Unsupported registry drive: {drive}")
+
+        return mapping[drive], subkey
+
+    def registry_get(self, path: str, name: str) -> str:
+        try:
+            hkey, subkey = self._parse_reg_path(path)
+            with winreg.OpenKey(hkey, subkey) as key:
+                value, _ = winreg.QueryValueEx(key, name)
+            return f'Registry value [{path}] "{name}" = {value}'
+        except Exception as e:
+            return f'Error reading registry: {str(e)}'
+
+    def registry_set(self, path: str, name: str, value: str, reg_type: str = "String") -> str:
+        type_mapping = {
+            "String": winreg.REG_SZ,
+            "ExpandString": winreg.REG_EXPAND_SZ,
+            "Binary": winreg.REG_BINARY,
+            "DWord": winreg.REG_DWORD,
+            "MultiString": winreg.REG_MULTI_SZ,
+            "QWord": winreg.REG_QWORD,
+        }
+
+        if reg_type not in type_mapping:
+            return f"Error: invalid registry type '{reg_type}'. Allowed: {', '.join(sorted(type_mapping.keys()))}"
+
+        try:
+            hkey, subkey = self._parse_reg_path(path)
+            # DWord and QWord should be integers
+            if reg_type in ("DWord", "QWord"):
+                try:
+                    value = int(value)
+                except ValueError:
+                    return f"Error: value '{value}' must be an integer for type {reg_type}"
+
+            with winreg.CreateKeyEx(hkey, subkey, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, name, 0, type_mapping[reg_type], value)
+            return f'Registry value [{path}] "{name}" set to "{value}" (type: {reg_type}).'
+        except Exception as e:
+            return f'Error writing registry: {str(e)}'
 
     def registry_delete(self, path: str, name: str | None = None) -> str:
-        q_path = ps_quote(path)
-        if name:
-            q_name = ps_quote(name)
-            command = f"Remove-ItemProperty -Path {q_path} -Name {q_name} -Force"
-            response, status = PowerShellExecutor.execute_command(command)
-            if status != 0:
-                return f'Error deleting registry value: {response.strip()}'
-            return f'Registry value [{path}] "{name}" deleted.'
-        else:
-            command = f"Remove-Item -Path {q_path} -Recurse -Force"
-            response, status = PowerShellExecutor.execute_command(command)
-            if status != 0:
-                return f'Error deleting registry key: {response.strip()}'
-            return f'Registry key [{path}] deleted.'
+        try:
+            hkey, subkey = self._parse_reg_path(path)
+            if name:
+                with winreg.OpenKey(hkey, subkey, 0, winreg.KEY_SET_VALUE) as key:
+                    winreg.DeleteValue(key, name)
+                return f'Registry value [{path}] "{name}" deleted.'
+            else:
+
+                def delete_key_recursive(root, key_path):
+                    with winreg.OpenKey(root, key_path, 0, winreg.KEY_ALL_ACCESS) as key:
+                        while True:
+                            try:
+                                subkey_name = winreg.EnumKey(key, 0)
+                                delete_key_recursive(key, subkey_name)
+                            except OSError:
+                                break
+                    winreg.DeleteKey(root, key_path)
+
+                delete_key_recursive(hkey, subkey)
+                return f'Registry key [{path}] deleted.'
+        except Exception as e:
+            return f'Error deleting registry: {str(e)}'
 
     def registry_list(self, path: str) -> str:
-        q_path = ps_quote(path)
-        command = (
-            f"$values = (Get-ItemProperty -Path {q_path} -ErrorAction Stop | "
-            f"Select-Object * -ExcludeProperty PS* | Format-List | Out-String).Trim(); "
-            f"$subkeys = (Get-ChildItem -Path {q_path} -ErrorAction SilentlyContinue | "
-            f"Select-Object -ExpandProperty PSChildName) -join \"`n\"; "
-            f"if ($values) {{ Write-Output \"Values:`n$values\" }}; "
-            f"if ($subkeys) {{ Write-Output \"`nSub-Keys:`n$subkeys\" }}; "
-            f"if (-not $values -and -not $subkeys) {{ Write-Output 'No values or sub-keys found.' }}"
-        )
-        response, status = PowerShellExecutor.execute_command(command)
-        if status != 0:
-            return f'Error listing registry: {response.strip()}'
-        return f'Registry key [{path}]:\n{response.strip()}'
+        try:
+            hkey, subkey = self._parse_reg_path(path)
+            with winreg.OpenKey(hkey, subkey, 0, winreg.KEY_READ) as key:
+                values = []
+                try:
+                    i = 0
+                    while True:
+                        name, value, _ = winreg.EnumValue(key, i)
+                        values.append(f"{name} : {value}")
+                        i += 1
+                except OSError:
+                    pass
+
+                subkeys = []
+                try:
+                    i = 0
+                    while True:
+                        name = winreg.EnumKey(key, i)
+                        subkeys.append(name)
+                        i += 1
+                except OSError:
+                    pass
+
+            output = []
+            if values:
+                output.append("Values:\n" + "\n".join(values))
+            if subkeys:
+                output.append("Sub-Keys:\n" + "\n".join(subkeys))
+
+            if not output:
+                return f"Registry key [{path}]:\nNo values or sub-keys found."
+
+            return f"Registry key [{path}]:\n" + "\n\n".join(output)
+        except Exception as e:
+            return f"Error listing registry: {str(e)}"
 
     @contextmanager
     def auto_minimize(self):

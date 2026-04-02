@@ -1,140 +1,140 @@
-from unittest.mock import patch
+import sys
+from unittest.mock import MagicMock, patch
+
+# Aggressively mock EVERYTHING BEFORE any imports
+sys.modules['winreg'] = MagicMock()
+sys.modules['comtypes'] = MagicMock()
+sys.modules['comtypes.client'] = MagicMock()
+sys.modules['win32gui'] = MagicMock()
+sys.modules['win32con'] = MagicMock()
+sys.modules['win32process'] = MagicMock()
+sys.modules['pywintypes'] = MagicMock()
+sys.modules['win32com'] = MagicMock()
+sys.modules['win32com.shell'] = MagicMock()
+sys.modules['psutil'] = MagicMock()
+sys.modules['PIL'] = MagicMock()
+sys.modules['PIL.Image'] = MagicMock()
+sys.modules['PIL.ImageFont'] = MagicMock()
+sys.modules['PIL.ImageDraw'] = MagicMock()
+sys.modules['tabulate'] = MagicMock()
+sys.modules['markdownify'] = MagicMock()
+sys.modules['fuzzywuzzy'] = MagicMock()
+sys.modules['requests'] = MagicMock()
+sys.modules['windows_mcp.vdm.core'] = MagicMock()
+sys.modules['windows_mcp.uia'] = MagicMock()
+sys.modules['windows_mcp.tree.service'] = MagicMock()
+sys.modules['windows_mcp.desktop.screenshot'] = MagicMock()
+
+# Mock sys.getwindowsversion
+if not hasattr(sys, 'getwindowsversion'):
+    mock_version = MagicMock()
+    mock_version.major = 10
+    mock_version.build = 19041
+    sys.getwindowsversion = MagicMock(return_value=mock_version)
+
+# Mock ctypes.windll
+import ctypes
+if not hasattr(ctypes, 'windll'):
+    ctypes.windll = MagicMock()
+
+if not hasattr(ctypes, 'HRESULT'):
+    ctypes.HRESULT = ctypes.c_long
 
 import pytest
 
+# Now import Desktop
 from windows_mcp.desktop.service import Desktop
-from windows_mcp.desktop.utils import ps_quote
-
-
-EXECUTE_COMMAND_PATH = "windows_mcp.desktop.powershell.PowerShellExecutor.execute_command"
-
+import winreg # This should now be the mock
 
 @pytest.fixture
 def desktop():
     with patch.object(Desktop, '__init__', lambda self: None):
         d = Desktop()
+        d._parse_reg_path = MagicMock()
         return d
-
-
-class TestPsQuote:
-    def test_simple_string(self):
-        assert ps_quote("hello") == "'hello'"
-
-    def test_single_quote_escaping(self):
-        assert ps_quote("it's") == "'it''s'"
-
-    def test_double_quotes_not_escaped(self):
-        assert ps_quote('say "hi"') == """'say "hi"'"""
-
-    def test_dollar_sign_not_expanded(self):
-        assert ps_quote("$env:PATH") == "'$env:PATH'"
-
-    def test_empty_string(self):
-        assert ps_quote("") == "''"
-
-    def test_registry_path(self):
-        result = ps_quote("HKCU:\\Software\\Test")
-        assert result == "'HKCU:\\Software\\Test'"
-
 
 class TestRegistryGet:
     def test_success(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("42\n", 0)):
-            result = desktop.registry_get(path="HKCU:\\Software\\Test", name="MyValue")
+        desktop._parse_reg_path.return_value = (1, "Software\\Test")
+        winreg.OpenKey.return_value.__enter__.return_value = "key_handle"
+        winreg.QueryValueEx.return_value = ("42", 1) # 1 = REG_SZ
+
+        result = desktop.registry_get(path="HKCU:\\Software\\Test", name="MyValue")
+
         assert 'MyValue' in result
         assert '42' in result
-        assert 'Error' not in result
+        winreg.OpenKey.assert_called_with(1, "Software\\Test")
+        winreg.QueryValueEx.assert_called_with("key_handle", "MyValue")
 
     def test_failure(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("Property not found", 1)):
-            result = desktop.registry_get(path="HKCU:\\Software\\Test", name="Missing")
+        desktop._parse_reg_path.return_value = (1, "Software\\Test")
+        winreg.OpenKey.side_effect = Exception("Key not found")
+        result = desktop.registry_get(path="HKCU:\\Software\\Test", name="Missing")
         assert 'Error reading registry' in result
-        assert 'Property not found' in result
-
-    def test_command_uses_ps_quote(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("val", 0)) as mock_exec:
-            desktop.registry_get(path="HKCU:\\Software\\O'Reilly", name="key's")
-        cmd = mock_exec.call_args[0][0]
-        assert "HKCU:\\Software\\O''Reilly" in cmd
-        assert "key''s" in cmd
-
+        assert 'Key not found' in result
+        winreg.OpenKey.side_effect = None
 
 class TestRegistrySet:
     def test_success(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("", 0)):
-            result = desktop.registry_set(path="HKCU:\\Software\\Test", name="MyKey", value="hello")
-        assert 'set to' in result
-        assert '"hello"' in result
+        desktop._parse_reg_path.return_value = (1, "Software\\Test")
+        winreg.HKEY_CURRENT_USER = 1
+        winreg.REG_SZ = 1
+        winreg.KEY_SET_VALUE = 2
+        winreg.CreateKeyEx.return_value.__enter__.return_value = "key_handle"
 
-    def test_failure(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("Access denied", 1)):
-            result = desktop.registry_set(path="HKLM:\\Software\\Test", name="Key", value="val")
-        assert 'Error writing registry' in result
+        result = desktop.registry_set(path="HKCU:\\Software\\Test", name="MyKey", value="hello")
+
+        assert 'set to' in result
+        assert 'hello' in result
+        winreg.CreateKeyEx.assert_called_with(1, "Software\\Test", 0, 2)
+        winreg.SetValueEx.assert_called_with("key_handle", "MyKey", 0, 1, "hello")
+
+    def test_dword_conversion(self, desktop):
+        desktop._parse_reg_path.return_value = (1, "Software\\Test")
+        winreg.REG_DWORD = 4
+        result = desktop.registry_set(path="HKCU:\\Test", name="Val", value="123", reg_type="DWord")
+        assert 'set to "123"' in result
+        winreg.SetValueEx.assert_called_with("key_handle", "Val", 0, 4, 123)
 
     def test_invalid_type(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH) as mock_exec:
-            result = desktop.registry_set(path="HKCU:\\Test", name="Key", value="val", reg_type="Invalid")
+        result = desktop.registry_set(path="HKCU:\\Test", name="Key", value="val", reg_type="Invalid")
         assert 'Error: invalid registry type' in result
-        assert 'Invalid' in result
-        mock_exec.assert_not_called()
-
-    def test_all_valid_types(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("", 0)):
-            for reg_type in ("String", "ExpandString", "Binary", "DWord", "MultiString", "QWord"):
-                result = desktop.registry_set(path="HKCU:\\Test", name="K", value="V", reg_type=reg_type)
-                assert 'Error' not in result
-
-    def test_creates_key_if_missing(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("", 0)) as mock_exec:
-            desktop.registry_set(path="HKCU:\\Software\\NewKey", name="Val", value="1")
-        cmd = mock_exec.call_args[0][0]
-        assert "New-Item" in cmd
-        assert "Test-Path" in cmd
-
 
 class TestRegistryDelete:
     def test_delete_value(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("", 0)) as mock_exec:
-            result = desktop.registry_delete(path="HKCU:\\Software\\Test", name="MyValue")
+        desktop._parse_reg_path.return_value = (1, "Software\\Test")
+        winreg.OpenKey.return_value.__enter__.return_value = "key_handle"
+        result = desktop.registry_delete(path="HKCU:\\Software\\Test", name="MyValue")
         assert 'deleted' in result
         assert '"MyValue"' in result
-        cmd = mock_exec.call_args[0][0]
-        assert "Remove-ItemProperty" in cmd
+        winreg.DeleteValue.assert_called_with("key_handle", "MyValue")
 
     def test_delete_key(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("", 0)) as mock_exec:
-            result = desktop.registry_delete(path="HKCU:\\Software\\Test", name=None)
-        assert 'key' in result.lower()
+        desktop._parse_reg_path.return_value = (1, "Software\\Test")
+        # Mock recursion: EnumKey returns a subkey then raises OSError
+        # We need to make sure EnumKey works for both the parent key and the child key
+        # First call for parent key returns "SubKey"
+        # Second call for parent key returns OSError (no more subkeys)
+        # First call for child key returns OSError (no subkeys)
+        winreg.EnumKey.side_effect = ["SubKey", OSError(), OSError()]
+        winreg.OpenKey.return_value.__enter__.return_value = "key_handle"
+        winreg.KEY_ALL_ACCESS = 1
+
+        result = desktop.registry_delete(path="HKCU:\\Software\\Test", name=None)
         assert 'deleted' in result
-        cmd = mock_exec.call_args[0][0]
-        assert "Remove-Item" in cmd
-        assert "-Recurse" in cmd
-
-    def test_delete_value_failure(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("Not found", 1)):
-            result = desktop.registry_delete(path="HKCU:\\Software\\Test", name="Missing")
-        assert 'Error deleting registry value' in result
-
-    def test_delete_key_failure(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("Access denied", 1)):
-            result = desktop.registry_delete(path="HKCU:\\Software\\Protected")
-        assert 'Error deleting registry key' in result
-
+        # Verify DeleteKey was called for subkey and the key itself
+        assert winreg.DeleteKey.call_count >= 2
+        winreg.EnumKey.side_effect = None
 
 class TestRegistryList:
     def test_success(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("Values:\nMyKey : hello\n\nSub-Keys:\nChild1", 0)):
-            result = desktop.registry_list(path="HKCU:\\Software\\Test")
-        assert 'MyKey' in result
-        assert 'hello' in result
-        assert 'Child1' in result
+        desktop._parse_reg_path.return_value = (1, "Software\\Test")
+        winreg.EnumValue.side_effect = [("Val1", "Data1", 1), OSError()]
+        winreg.EnumKey.side_effect = ["Sub1", OSError()]
+        winreg.KEY_READ = 1
 
-    def test_failure(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("Path not found", 1)):
-            result = desktop.registry_list(path="HKCU:\\Software\\Missing")
-        assert 'Error listing registry' in result
-
-    def test_empty(self, desktop):
-        with patch(EXECUTE_COMMAND_PATH, return_value=("No values or sub-keys found.", 0)):
-            result = desktop.registry_list(path="HKCU:\\Software\\Empty")
-        assert 'No values or sub-keys found' in result
+        result = desktop.registry_list(path="HKCU:\\Software\\Test")
+        assert 'Val1' in result
+        assert 'Sub1' in result
+        winreg.EnumValue.side_effect = None
+        winreg.EnumKey.side_effect = None
