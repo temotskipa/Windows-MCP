@@ -39,9 +39,6 @@ logger.setLevel(logging.INFO)
 
 import windows_mcp.uia as uia  # noqa: E402
 
-dxcam = screenshot_capture.dxcam
-mss = screenshot_capture.mss
-
 # Key name aliases for shortcut keys that differ from UIA SpecialKeyNames
 _KEY_ALIASES = {
     "backspace": "Back",
@@ -82,33 +79,6 @@ class Desktop:
         self.encoding = getpreferredencoding()
         self.tree = Tree(self)
         self.desktop_state = None
-        self._dxcam_cameras: dict[int, object] = {}
-
-    @staticmethod
-    def _get_screenshot_backend() -> str:
-        return screenshot_capture.get_screenshot_backend()
-
-    def _resolve_dxcam_region(
-        self, capture_rect: uia.Rect | None
-    ) -> tuple[int, tuple[int, int, int, int] | None] | None:
-        if dxcam is None:
-            return None
-        return screenshot_capture.resolve_dxcam_region(capture_rect, uia.GetMonitorsRect)
-
-    def _get_dxcam_camera(self, output_idx: int):
-        # Keep method for backward compatibility with tests and callers.
-        return screenshot_capture.get_dxcam_camera(output_idx, self._dxcam_cameras, dxcam_module=dxcam)
-
-    def _capture_with_dxcam(self, capture_rect: uia.Rect) -> Image.Image:
-        return screenshot_capture.capture_with_dxcam(
-            capture_rect,
-            uia.GetMonitorsRect,
-            self._dxcam_cameras,
-            dxcam_module=dxcam,
-        )
-
-    def _capture_with_pillow(self, capture_rect: uia.Rect | None = None) -> Image.Image:
-        return screenshot_capture.capture_with_pillow(capture_rect, self._crop_screenshot)
 
     def get_state(
         self,
@@ -1051,12 +1021,7 @@ class Desktop:
     def get_screenshot(self, capture_rect: uia.Rect | None = None) -> Image.Image:
         image, used_backend = screenshot_capture.capture(
             capture_rect=capture_rect,
-            crop_screenshot=self._crop_screenshot,
             get_monitors_rect=uia.GetMonitorsRect,
-            camera_cache=self._dxcam_cameras,
-            backend=self._get_screenshot_backend(),
-            dxcam_module=dxcam,
-            mss_module=mss,
         )
         self._last_screenshot_backend = used_backend
         return image
