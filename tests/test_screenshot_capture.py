@@ -15,6 +15,7 @@ from windows_mcp.desktop.screenshot import (
     _MssBackend,
     _PillowBackend,
     _ScreenshotBackend,
+    _get_backend,
     capture,
     get_screenshot_backend,
 )
@@ -303,11 +304,11 @@ class TestPillowBackend:
 
     def test_capture_falls_back_to_primary_on_grab_error_without_rect(self, monkeypatch):
         primary = Image.new("RGB", (1920, 1080), "red")
-        call_count = {"n": 0}
+        calls: list[dict[str, object]] = []
 
         def fake_grab(**kwargs):
-            call_count["n"] += 1
-            if call_count["n"] == 1:
+            calls.append(kwargs)
+            if len(calls) == 1:
                 raise OSError("grab failed")
             return primary
 
@@ -316,6 +317,7 @@ class TestPillowBackend:
         result = _PillowBackend().capture(None)
         assert result.size == (1920, 1080)
         assert result.getbbox() is not None
+        assert calls == [{"all_screens": True}, {}]
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +326,13 @@ class TestPillowBackend:
 
 
 class TestCapture:
+    def test_get_backend_caches_instance_by_name(self):
+        backend1 = _get_backend("pillow")
+        backend2 = _get_backend("pillow")
+
+        assert backend1 is backend2
+        assert isinstance(backend1, _PillowBackend)
+
     def test_explicit_pillow_returns_image_and_name(self, monkeypatch):
         fake_img = Image.new("RGB", (1920, 1080), "white")
         monkeypatch.setattr(
@@ -382,6 +391,43 @@ class TestCapture:
         # mss failed → pillow fallback
         assert backend_name == "pillow"
         assert isinstance(image, Image.Image)
+
+    def test_explicit_backend_exception_triggers_pillow_fallback(self, monkeypatch):
+        """Even an explicitly selected backend falls back to pillow on capture failure."""
+        monkeypatch.setattr(screenshot, "dxcam", None)
+
+        fake_mss = MagicMock()
+        fake_mss.mss.return_value.__enter__ = MagicMock(side_effect=OSError("mss broken"))
+        monkeypatch.setattr(screenshot, "mss", fake_mss)
+
+        fake_img = Image.new("RGB", (1920, 1080), "white")
+        monkeypatch.setattr(
+            screenshot, "ImageGrab", MagicMock(grab=MagicMock(return_value=fake_img))
+        )
+
+        image, backend_name = capture(MONITOR_0, backend="mss")
+
+        assert backend_name == "pillow"
+        assert isinstance(image, Image.Image)
+        assert image.size == (1920, 1080)
+
+    def test_explicit_dxcam_cross_monitor_rect_falls_back_to_pillow(self, monkeypatch):
+        monkeypatch.setenv("WINDOWS_MCP_SCREENSHOT_BACKEND", "dxcam")
+        monkeypatch.setattr(screenshot, "dxcam", MagicMock())
+        monkeypatch.setattr(
+            "windows_mcp.desktop.screenshot.uia.GetMonitorsRect", lambda: TWO_MONITORS
+        )
+
+        fake_img = Image.new("RGB", (3840, 1080), "blue")
+        monkeypatch.setattr(
+            screenshot, "ImageGrab", MagicMock(grab=MagicMock(return_value=fake_img))
+        )
+
+        image, backend_name = capture(Rect(0, 0, 3840, 1080), backend="dxcam")
+
+        assert backend_name == "pillow"
+        assert isinstance(image, Image.Image)
+        assert image.size == (3840, 1080)
 
     def test_capture_returns_non_empty_image(self, monkeypatch):
         """Verify the returned image has actual pixel content (not all-zero)."""
