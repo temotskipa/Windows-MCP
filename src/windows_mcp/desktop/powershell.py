@@ -6,12 +6,73 @@ import ctypes.wintypes
 import logging
 import os
 import shutil
-import socket
 import subprocess
 
 from windows_mcp.desktop.utils import run_with_graceful_timeout
 
 logger = logging.getLogger(__name__)
+
+
+def _read_reg_env(hkey: int, subkey: str) -> tuple[dict[str, str], str, str]:
+    """Read all environment variables from a registry key.
+
+    Returns (vars, path, pathext) where *vars* is a dict of name->value
+    (excluding PATH/PATHEXT), and *path*/*pathext* are the raw expanded
+    values for those two special keys (empty string if absent).
+    """
+    import winreg
+
+    variables: dict[str, str] = {}
+    path = ""
+    pathext = ""
+
+    try:
+        with winreg.OpenKey(hkey, subkey) as key:
+            i = 0
+            while True:
+                try:
+                    name, value, reg_type = winreg.EnumValue(key, i)
+                    if reg_type == winreg.REG_EXPAND_SZ:
+                        value = winreg.ExpandEnvironmentStrings(value)
+                    upper = name.upper()
+                    if upper == "PATH":
+                        path = value
+                    elif upper == "PATHEXT":
+                        pathext = value
+                    else:
+                        variables[name] = value
+                    i += 1
+                except OSError:
+                    break
+    except OSError:
+        pass
+
+    return variables, path, pathext
+
+
+def _dedup_path(*segments: str) -> str:
+    """Join PATH segments and deduplicate entries (case-insensitive)."""
+    seen = set()
+    deduped = []
+    for p in ";".join(filter(None, segments)).split(";"):
+        norm = p.lower().rstrip("\\")
+        if norm and norm not in seen:
+            seen.add(norm)
+            deduped.append(p)
+    return ";".join(deduped)
+
+
+def _win32_name(dll: str, func: str) -> str:
+    """Call a Win32 GetXxxNameW function that writes into a WCHAR buffer."""
+    buf = ctypes.create_unicode_buffer(256)
+    size = ctypes.wintypes.DWORD(256)
+    fn = getattr(ctypes.windll, dll)
+    if getattr(fn, func)(buf, ctypes.byref(size)):
+        return buf.value
+    return ""
+
+
+_FALLBACK_PATHEXT = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.CPL;.PY;.PYW"
 
 
 def _prepare_env() -> dict[str, str]:
@@ -22,80 +83,54 @@ def _prepare_env() -> dict[str, str]:
     from os.environ and fills in missing variables from:
       1. System-level env vars from the registry (HKLM)
       2. User-level env vars from the registry (HKCU)
-      3. Dynamic vars (COMPUTERNAME, USERNAME, etc.) via Win32 API / stdlib
+      3. Dynamic vars (COMPUTERNAME, USERNAME, etc.) via Win32 API
     Existing values in os.environ are never overwritten, only missing ones
     are supplemented. PATH is special-cased: registry paths are prepended.
     """
     env = os.environ.copy()
 
-    # 1) Supplement missing vars from registry
-    machine_path = ""
     try:
         import winreg
 
-        # System-level environment variables
-        machine_pathext = ""
-        with winreg.OpenKey(
+        machine_vars, machine_path, machine_pathext = _read_reg_env(
             winreg.HKEY_LOCAL_MACHINE,
             r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
-        ) as key:
-            i = 0
-            while True:
-                try:
-                    name, value, _ = winreg.EnumValue(key, i)
-                    upper = name.upper()
-                    if upper == "PATH":
-                        machine_path = value
-                    elif upper == "PATHEXT":
-                        machine_pathext = value
-                    else:
-                        env.setdefault(name, value)
-                    i += 1
-                except OSError:
-                    break
+        )
+        user_vars, user_path, user_pathext = _read_reg_env(winreg.HKEY_CURRENT_USER, r"Environment")
 
-        # User-level environment variables
-        user_path = ""
-        try:
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
-                i = 0
-                while True:
-                    try:
-                        name, value, _ = winreg.EnumValue(key, i)
-                        if name.upper() == "PATH":
-                            user_path = value
-                        else:
-                            env.setdefault(name, value)
-                        i += 1
-                    except OSError:
-                        break
-        except OSError:
-            pass
+        # Supplement missing vars. User-level (HKCU) takes precedence over
+        # system-level (HKLM) for same-named keys, matching Windows' resolution order.
+        for name, value in {**machine_vars, **user_vars}.items():
+            env.setdefault(name, value)
 
-        # PATH: prepend registry paths to ensure system executables are discoverable
-        registry_path = ";".join(filter(None, [machine_path, user_path]))
-        if registry_path:
-            env["PATH"] = ";".join(filter(None, [registry_path, env.get("PATH", "")]))
+        # PATH: prepend registry paths, deduplicated
+        if machine_path or user_path:
+            env["PATH"] = _dedup_path(machine_path, user_path, env.get("PATH", ""))
 
-        # PATHEXT: use registry value if the inherited one looks incomplete (e.g. venv strips it)
-        if machine_pathext and ".EXE" not in env.get("PATHEXT", ""):
-            env["PATHEXT"] = machine_pathext
+        # PATHEXT: use registry value if the inherited one looks incomplete
+        effective_pathext = user_pathext or machine_pathext
+        if effective_pathext and ".EXE" not in env.get("PATHEXT", ""):
+            env["PATHEXT"] = effective_pathext
 
     except Exception:
         logger.debug("Failed to read environment from registry")
         if ".EXE" not in env.get("PATHEXT", ""):
-            env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.CPL;.PY;.PYW"
+            env["PATHEXT"] = _FALLBACK_PATHEXT
 
-    # 2) Dynamic variables not stored in registry env keys — only fill if missing
+    # Dynamic variables not stored in registry — only fill if missing
     if not env.get("COMPUTERNAME"):
-        env["COMPUTERNAME"] = socket.gethostname().upper()
+        try:
+            computer_name = _win32_name("kernel32", "GetComputerNameW")
+            if computer_name:
+                env["COMPUTERNAME"] = computer_name
+        except Exception as e:
+            logger.debug("Failed to get COMPUTERNAME via Win32 API: %s", e)
 
     if not env.get("USERNAME"):
         try:
-            buf = ctypes.create_unicode_buffer(256)
-            size = ctypes.wintypes.DWORD(256)
-            if ctypes.windll.advapi32.GetUserNameW(buf, ctypes.byref(size)):
-                env["USERNAME"] = buf.value
+            user_name = _win32_name("advapi32", "GetUserNameW")
+            if user_name:
+                env["USERNAME"] = user_name
         except Exception as e:
             logger.debug("Failed to get USERNAME via Win32 API: %s", e)
 
