@@ -2043,3 +2043,78 @@ class VisualEffects(IntEnum):
     VisualEffects_Glow = 3
     VisualEffects_SoftEdges = 4
     VisualEffects_Bevel = 5
+
+
+class UIAError(IntEnum):
+    """UI Automation and COM error codes.
+
+    Source: Winerror.h, UIAutomationCoreApi.h, WinError.h.
+    Categories:
+      UIA_E_*     — UI Automation–specific errors
+      RO_E_*      — Windows Runtime object lifecycle errors
+      RPC_E_*     — COM RPC transport/threading errors
+      CO_E_*      — COM object state errors
+      E_*         — General COM errors
+    """
+
+    UIA_E_ELEMENTNOTENABLED = -2147220992  # 0x80040200 — method called on disabled element
+    UIA_E_ELEMENTNOTAVAILABLE = -2147220991  # 0x80040201 — element destroyed or virtualized
+    UIA_E_NOCLICKABLEPOINT = -2147220990  # 0x80040202 — element has no clickable point
+    UIA_E_PROXYASSEMBLYNOTLOADED = -2147220989  # 0x80040203 — client-side proxy provider failed to load
+    UIA_E_NOTSUPPORTED = -2147220988  # 0x80040204 — property/pattern not supported by provider
+    UIA_E_INVALIDOPERATION = -2146233079  # 0x80131509 — operation not valid in current state
+    UIA_E_TIMEOUT = -2146233083  # 0x80131505 — UIA operation timed out
+
+    EVENT_E_ALL_SUBSCRIBERS_FAILED = -2147220991  # 0x80040201 — same as UIA_E_ELEMENTNOTAVAILABLE
+
+    RO_E_CLOSED = -2147483629  # 0x80000013 — object has been closed/disposed
+
+    RPC_E_CALL_REJECTED = -2147418111  # 0x80010001 — callee rejected the call (app busy, may retry)
+    RPC_E_CALL_CANCELED = -2147418110  # 0x80010002 — call canceled by message filter
+    RPC_E_CONNECTION_TERMINATED = -2147418106  # 0x80010006 — connection terminated or in bogus state
+    RPC_E_SERVER_DIED = -2147418105  # 0x80010007 — server gone, call may have executed
+    RPC_E_SERVER_DIED_DNE = -2147418094  # 0x80010012 — server gone, call did NOT execute
+    RPC_E_SYS_CALL_FAILED = -2147417854  # 0x80010100 — underlying system call failed
+    RPC_E_OUT_OF_RESOURCES = -2147417855  # 0x80010101 — could not allocate required resource
+    RPC_E_ATTEMPTED_MULTITHREAD = -2147417854  # 0x80010102 — multiple threads in STA mode
+    RPC_E_SERVERFAULT = -2147417851  # 0x80010105 — server threw an exception
+    RPC_E_CHANGED_MODE = -2147417850  # 0x80010106 — STA/MTA mode conflict on thread
+    RPC_E_DISCONNECTED = -2147418360  # 0x80010108 — object invoked has disconnected from clients
+    RPC_E_SERVERCALL_RETRYLATER = -2147417846  # 0x8001010A — app busy, retry later
+    RPC_E_SERVERCALL_REJECTED = -2147417845  # 0x8001010B — message filter rejected the call
+    RPC_E_WRONG_THREAD = -2147417842  # 0x8001010E — interface marshalled for a different thread
+    RPC_E_THREAD_NOT_INIT = -2147417841  # 0x8001010F — CoInitialize not called on current thread
+    RPC_E_TIMEOUT = -2147417825  # 0x8001011F — RPC-level operation timed out
+    RPC_E_UNEXPECTED = -2147352577  # 0x8001FFFF — internal RPC error
+    RPC_E_ACCESS_DENIED = -2147417829  # 0x8001011B — RPC-level access denied
+
+    CO_E_OBJNOTCONNECTED = -2147220995  # 0x800401FD — object not connected to server
+    CO_E_RELEASED = -2147220993  # 0x800401FF — object has been released
+    CO_E_NOTINITIALIZED = -2147220496  # 0x800401F0 — CoInitialize not called
+
+    E_ACCESSDENIED = -2147024891  # 0x80070005 — access denied
+
+
+def is_dead_element_error(code: int) -> bool:
+    """Check if error code indicates element or window no longer exists."""
+    dead_codes = {
+        UIAError.UIA_E_ELEMENTNOTAVAILABLE,
+        UIAError.RO_E_CLOSED,
+        UIAError.RPC_E_DISCONNECTED,
+        UIAError.RPC_E_SERVER_DIED,
+        UIAError.RPC_E_SERVER_DIED_DNE,
+        UIAError.RPC_E_CONNECTION_TERMINATED,
+        UIAError.CO_E_OBJNOTCONNECTED,
+        UIAError.CO_E_RELEASED,
+    }
+    return code in dead_codes
+
+
+def is_retryable_error(code: int) -> bool:
+    """Check if error code indicates app is busy but alive — may succeed on retry."""
+    retryable_codes = {
+        UIAError.RPC_E_CALL_REJECTED,
+        UIAError.RPC_E_SERVERCALL_RETRYLATER,
+        UIAError.RPC_E_SERVERCALL_REJECTED,
+    }
+    return code in retryable_codes
