@@ -31,10 +31,7 @@
         "ANONYMIZED_TELEMETRY": "${user_config.anonymized_telemetry}",
         "WINDOWS_MCP_PROFILE_SNAPSHOT": "${user_config.profile_snapshot}",
         "WINDOWS_MCP_SCREENSHOT_BACKEND": "${user_config.screenshot_backend}",
-        "WINDOWS_MCP_DEBUG": "${user_config.debug}",
-        "UV_CACHE_DIR": "${user_config.uv_cache_dir}",
-        "UV_PYTHON_INSTALL_DIR": "${user_config.uv_python_install_dir}",
-        "UV_PROJECT_ENVIRONMENT": "${user_config.uv_project_environment}"
+        "WINDOWS_MCP_DEBUG": "${user_config.debug}"
       }
     }
   },
@@ -66,24 +63,6 @@
       "description": "Enable debug mode to provide verbose logging for troubleshooting.",
       "required": false,
       "default": false
-    },
-    "uv_cache_dir": {
-      "type": "string",
-      "title": "UV Cache Directory",
-      "description": "Override where UV stores downloaded packages and build artifacts. Useful when system policies (e.g., AppLocker) block running executables from the user profile directory. Leave unset to use UV's default. Docs: https://docs.astral.sh/uv/reference/environment/#uv_cache_dir",
-      "required": false
-    },
-    "uv_python_install_dir": {
-      "type": "string",
-      "title": "UV Python Install Directory",
-      "description": "Override where UV installs managed Python interpreters. Useful when system policies block running executables from the user profile directory. Leave unset to use UV's default. Docs: https://docs.astral.sh/uv/reference/environment/#uv_python_install_dir",
-      "required": false
-    },
-    "uv_project_environment": {
-      "type": "string",
-      "title": "UV Project Virtual Environment",
-      "description": "Override where UV creates this project's virtual environment instead of the default .venv directory. Useful when system policies block running executables from the user profile directory. Leave unset to use UV's default. Docs: https://docs.astral.sh/uv/reference/environment/#uv_project_environment",
-      "required": false
     }
   },
   "tools": [
