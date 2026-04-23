@@ -275,11 +275,14 @@ Windows-MCP does not implement comprehensive audit logging by default. For compl
 - **We DO NOT collect:**
   - **Tool arguments** (text typed, coordinates, file paths, etc.)
   - **Tool outputs** (screenshots, commands results, page content, etc.)
-  - **Personal Information** (IP addresses are not stored, no user identifiers beyond a random UUID)
-- Telemetry is enabled by default but can be disabled by setting the `ANONYMIZED_TELEMETRY` environment variable to `false` in the MCP server configuration.
-- Windows-MCP processes commands locally on your machine.
-- Screenshots and state captures remain on your local system.
-- Web scraping may expose browsing activity to target websites.
+  - **Personal Information**:
+    - **No User Identifiers** beyond a randomly generated UUID stored locally.
+- **Privacy Considerations:**
+  - **Error Messages**: In rare cases, system error messages (which are captured) may include local file paths if they are part of the OS error description.
+  - Telemetry is **enabled by default** to help maintainers understand usage patterns and prioritize features, but can be disabled at any time by setting the `ANONYMIZED_TELEMETRY` environment variable to `false`.
+  - Windows-MCP processes all commands locally on your machine.
+  - Screenshots and state captures remain strictly on your local system.
+  - Web scraping may expose browsing activity to the target websites.
 
 ## Tool Annotations Reference
 
