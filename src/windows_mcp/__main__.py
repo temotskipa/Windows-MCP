@@ -102,7 +102,7 @@ def _build_local_mcp() -> FastMCP:
         """Runs initialization code before the server starts and cleanup code after it shuts down."""
         global desktop, watchdog, analytics, screen_size
 
-        if os.getenv("ANONYMIZED_TELEMETRY", "false").lower() == "true":
+        if os.getenv("ANONYMIZED_TELEMETRY", "true").lower() != "false":
             analytics = PostHogAnalytics()
         desktop = Desktop()
         watchdog = WatchDog()

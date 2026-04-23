@@ -484,7 +484,7 @@ All variables are optional unless noted. Set them via the `env` key in `claude_d
 
 | Variable | Default | Description |
 |---|---|---|
-| `ANONYMIZED_TELEMETRY` | `false` | Set to `true` to enable anonymous usage telemetry. No personal data, tool arguments, or outputs are ever collected regardless of this setting. |
+| `ANONYMIZED_TELEMETRY` | `true` | Set to `false` to disable anonymous usage telemetry. No personal data, tool arguments, or outputs are ever collected regardless of this setting. |
 
 ### Debug
 
@@ -506,7 +506,7 @@ All variables are optional unless noted. Set them via the `env` key in `claude_d
         "WINDOWS_MCP_SCREENSHOT_SCALE": "0.5",
         "WINDOWS_MCP_SCREENSHOT_BACKEND": "auto",
         "WINDOWS_MCP_PROFILE_SNAPSHOT": "false",
-        "ANONYMIZED_TELEMETRY": "false",
+        "ANONYMIZED_TELEMETRY": "true",
         "WINDOWS_MCP_DEBUG": "false"
       }
     }
@@ -575,7 +575,7 @@ Please read our [Security Policy](SECURITY.md).
 
 Windows-MCP collects usage data to help improve the MCP server. No personal information, no tool arguments, no outputs are tracked.
 
-To enable telemetry, set `ANONYMIZED_TELEMETRY` to `true` in your MCP client configuration:
+To disable telemetry, set `ANONYMIZED_TELEMETRY` to `false` in your MCP client configuration:
 
 ```json
 {
@@ -586,7 +586,7 @@ To enable telemetry, set `ANONYMIZED_TELEMETRY` to `true` in your MCP client con
         "windows-mcp"
       ],
       "env": {
-        "ANONYMIZED_TELEMETRY": "true"
+        "ANONYMIZED_TELEMETRY": "false"
       }
     }
   }

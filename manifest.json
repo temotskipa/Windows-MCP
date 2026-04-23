@@ -41,7 +41,7 @@
       "title": "Anonymized Telemetry",
       "description": "Windows-MCP collects basic usage data to help improve the MCP server. No personal information, tool arguments, or tool outputs are tracked.",
       "required": false,
-      "default": false
+      "default": true
     },
     "profile_snapshot": {
       "type": "boolean",
