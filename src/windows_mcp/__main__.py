@@ -38,12 +38,7 @@ def _http_middleware() -> list:
     """Return ASGI middleware for HTTP transports including CORS and OPTIONS handling."""
     return [
         Middleware(OptionsMiddleware),
-        Middleware(
-            CORSMiddleware,
-            allow_origins=["*"],
-            allow_methods=["*"],
-            allow_headers=["*"],
-        ),
+        Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]),
     ]
 
 
@@ -191,9 +186,10 @@ def _run_server(transport: str, host: str, port: int) -> None:
 def main(transport, host, port, debug):
     if debug:
         enable_debug()
-
-    if is_debug():
-        logging.basicConfig(level=logging.DEBUG)
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Also set for uvicorn loggers if they exist
+        for name in ["uvicorn", "uvicorn.error", "uvicorn.access", "fastmcp"]:
+            logging.getLogger(name).setLevel(logging.DEBUG)
 
     logger.debug("Starting windows-mcp (transport=%s)", transport)
     try:
