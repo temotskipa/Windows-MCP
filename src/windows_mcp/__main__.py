@@ -18,7 +18,7 @@ desktop: Any | None = None
 watchdog: Any | None = None
 analytics: Any | None = None
 screen_size: Any | None = None
-_local_mcp: FastMCP | None = None
+_mcp: FastMCP | None = None
 
 instructions = dedent("""
 Windows MCP server provides tools to interact directly with the Windows desktop,
@@ -77,20 +77,12 @@ class OptionsMiddleware:
             await self.app(scope, receive, send)
 
 
-def _add_cors_options_handlers(mcp: FastMCP) -> None:
-    """Register custom route handlers for CORS OPTIONS requests."""
-    # Note: Custom routes are registered via the http_app() method when
-    # the app is created, so we don't need to do anything here with the new
-    # OptionsMiddleware approach. The middleware is passed via run().
-    pass
+def _build_mcp() -> FastMCP:
+    """Create the MCP server instance."""
+    global _mcp
 
-
-def _build_local_mcp() -> FastMCP:
-    """Create the local desktop-control server only when local mode is used."""
-    global _local_mcp
-
-    if _local_mcp is not None:
-        return _local_mcp
+    if _mcp is not None:
+        return _mcp
 
     from windows_mcp.analytics import PostHogAnalytics
     from windows_mcp.desktop.service import Desktop
@@ -121,15 +113,14 @@ def _build_local_mcp() -> FastMCP:
             if analytics:
                 await analytics.close()
 
-    _local_mcp = FastMCP(name="windows-mcp", instructions=instructions, lifespan=lifespan)
-    register_all(_local_mcp, get_desktop=_get_desktop, get_analytics=_get_analytics)
-    _add_cors_options_handlers(_local_mcp)
-    return _local_mcp
+    _mcp = FastMCP(name="windows-mcp", instructions=instructions, lifespan=lifespan)
+    register_all(_mcp, get_desktop=_get_desktop, get_analytics=_get_analytics)
+    return _mcp
 
 
 def __getattr__(name: str):
     if name in {"state_tool", "screenshot_tool"}:
-        _build_local_mcp()
+        _build_mcp()
         from windows_mcp.tools import snapshot
 
         tool = getattr(snapshot, name)
@@ -145,22 +136,18 @@ class Transport(Enum):
     STDIO = "stdio"
     SSE = "sse"
     STREAMABLE_HTTP = "streamable-http"
-    def __str__(self):
-        return self.value
 
-class Mode(Enum):
-    LOCAL = "local"
     def __str__(self):
         return self.value
 
 
-def _run_local_mode(transport: str, host: str, port: int) -> None:
-    local_mcp = _build_local_mcp()
+def _run_server(transport: str, host: str, port: int) -> None:
+    mcp = _build_mcp()
     match transport:
         case Transport.STDIO.value:
-            local_mcp.run(transport=Transport.STDIO.value, show_banner=False)
+            mcp.run(transport=Transport.STDIO.value, show_banner=False)
         case Transport.SSE.value | Transport.STREAMABLE_HTTP.value:
-            local_mcp.run(
+            mcp.run(
                 transport=transport,
                 host=host,
                 port=port,
@@ -171,13 +158,14 @@ def _run_local_mode(transport: str, host: str, port: int) -> None:
             raise ValueError(f"Invalid transport: {transport}")
 
 
-
 @click.command()
 @click.option(
     "--transport",
     help="The transport layer used by the MCP server.",
-    type=click.Choice([Transport.STDIO.value,Transport.SSE.value,Transport.STREAMABLE_HTTP.value]),
-    default='stdio'
+    type=click.Choice(
+        [Transport.STDIO.value, Transport.SSE.value, Transport.STREAMABLE_HTTP.value]
+    ),
+    default="stdio",
 )
 @click.option(
     "--host",
@@ -207,9 +195,9 @@ def main(transport, host, port, debug):
     if is_debug():
         logging.basicConfig(level=logging.DEBUG)
 
-    logger.debug("Starting windows-mcp (mode=local, transport=%s)", transport)
+    logger.debug("Starting windows-mcp (transport=%s)", transport)
     try:
-        _run_local_mode(transport=transport, host=host, port=port)
+        _run_server(transport=transport, host=host, port=port)
         logger.debug("Server shut down normally")
     except Exception:
         logger.error("Server exiting due to unhandled exception", exc_info=True)
