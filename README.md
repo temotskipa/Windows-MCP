@@ -410,40 +410,7 @@ npm install -g @anthropic-ai/claude-code
 
 ---
 
-
-### Corporate / Restricted Environments
-
-On locked-down Windows machines, security policies such as **AppLocker** or **Software Restriction Policies** may block execution of binaries from user-profile directories (`%APPDATA%`, `%LOCALAPPDATA%`). Since UV stores its cache, managed Python interpreters, and virtual environments under these paths by default, Windows-MCP will fail to start.
-
-To work around this, configure the three UV path overrides in your MCP client settings to point to a directory outside the user profile (e.g., `C:\dev\.uv`):
-
-| Setting | Example value | UV docs |
-|---|---|---|
-| `uv_cache_dir` | `C:/dev/.uv/cache` | [UV_CACHE_DIR](https://docs.astral.sh/uv/reference/environment/#uv_cache_dir) |
-| `uv_python_install_dir` | `C:/dev/.uv/python` | [UV_PYTHON_INSTALL_DIR](https://docs.astral.sh/uv/reference/environment/#uv_python_install_dir) |
-| `uv_project_environment` | `C:/dev/.uv/venvs/windows-mcp` | [UV_PROJECT_ENVIRONMENT](https://docs.astral.sh/uv/reference/environment/#uv_project_environment) |
-
-If you are configuring Windows-MCP manually via `claude_desktop_config.json` (or equivalent), add these as environment variables:
-
-```json
-{
-  "mcpServers": {
-    "windows-mcp": {
-      "command": "uvx",
-      "args": ["windows-mcp"],
-      "env": {
-        "UV_CACHE_DIR": "C:/dev/.uv/cache",
-        "UV_PYTHON_INSTALL_DIR": "C:/dev/.uv/python",
-        "UV_PROJECT_ENVIRONMENT": "C:/dev/.uv/venvs/windows-mcp"
-      }
-    }
-  }
-}
-```
-
-The target directories must exist and be writable. These settings have no effect when left unset; UV will use its built-in defaults.
-
-## 🖥️ Running
+## 🖥️ Running Windows-MCP
 
 Windows-MCP runs directly on your Windows machine and exposes its tools to the connected MCP client.
 
