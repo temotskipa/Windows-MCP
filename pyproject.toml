@@ -75,3 +75,5 @@ ignore = ["E501"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
+[tool.uv.extra-build-dependencies]
+pyperclip = ["setuptools"]
