@@ -197,3 +197,57 @@ def register(mcp, *, get_desktop, get_analytics):
     def wait_tool(duration: int, ctx: Context = None) -> str:
         time.sleep(duration)
         return f"Waited for {duration} seconds."
+
+    @mcp.tool(
+        name="WaitForElement",
+        description="Waits until a specific UI element appears on the screen (by exact name). Returns the coordinates if found, or times out. Use this instead of Wait when waiting for a specific window, button, or loading text to appear.",
+        annotations=ToolAnnotations(
+            title="WaitForElement",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    @with_analytics(get_analytics(), "WaitForElement-Tool")
+    def wait_for_element_tool(name: str, timeout: int = 30, ctx: Context = None) -> str:
+        desktop = get_desktop()
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            state = desktop.get_state(use_vision=False, use_annotation=False, use_dom=False, use_ui_tree=True)
+            if state and state.tree:
+                for node in state.tree.interactive_nodes + state.tree.scrollable_nodes:
+                    if node.name == name:
+                        return f"Found '{name}' at {node.center.to_string()} after {int(time.time() - start_time)} seconds."
+            time.sleep(1)
+        return f"Error: Timeout after {timeout} seconds waiting for element '{name}'."
+
+    @mcp.tool(
+        name="FindElement",
+        description="Finds UI elements matching a query (name or regex) and returns a list of them with coordinates and metadata without capturing a screenshot. Much faster and cheaper than Snapshot.",
+        annotations=ToolAnnotations(
+            title="FindElement",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
+    @with_analytics(get_analytics(), "FindElement-Tool")
+    def find_element_tool(query: str, ctx: Context = None) -> list[dict]:
+        import re
+        desktop = get_desktop()
+        state = desktop.get_state(use_vision=False, use_annotation=False, use_dom=False, use_ui_tree=True)
+        results = []
+        if state and state.tree:
+            all_nodes = state.tree.interactive_nodes + state.tree.scrollable_nodes
+            for node in all_nodes:
+                if query.lower() in node.name.lower() or re.search(query, node.name, re.IGNORECASE):
+                    results.append({
+                        "name": node.name,
+                        "control_type": node.control_type,
+                        "window_name": node.window_name,
+                        "coords": node.center.to_string(),
+                        "metadata": node.metadata
+                    })
+        return results
