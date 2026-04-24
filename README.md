@@ -509,6 +509,12 @@ MCP Client can access the following tools to interact with Windows:
 
 `MultiSelect` and `MultiEdit` now resolve label-based coordinates in bulk through `Desktop.get_coordinates_from_labels`, which avoids repeated lookups against the desktop tree state.
 
+PR benchmark (mock-based):
+
+- Iterative: `0.003578s`
+- Bulk: `0.002238s`
+- Improvement: `~37.45%`
+
 In a local Windows benchmark with a synthetic tree state and 35,000 label resolutions per run, the measured results were:
 
 - Iterative: `0.005895s`
