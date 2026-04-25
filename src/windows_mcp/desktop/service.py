@@ -612,6 +612,26 @@ class Desktop:
                 raise IndexError(f"Label {label} out of range")
         return element_node.center.x, element_node.center.y
 
+    def get_coordinates_from_labels(self, labels: list[int]) -> list[tuple[int, int]]:
+        """Resolve multiple UI element labels to screen coordinates in bulk."""
+        tree_state = self.desktop_state.tree_state
+        interactive_nodes = tree_state.interactive_nodes
+        scrollable_nodes = tree_state.scrollable_nodes
+        interactive_len = len(interactive_nodes)
+
+        results = []
+        for label in labels:
+            if label < interactive_len:
+                element_node = interactive_nodes[label]
+            else:
+                scroll_idx = label - interactive_len
+                if scroll_idx < len(scrollable_nodes):
+                    element_node = scrollable_nodes[scroll_idx]
+                else:
+                    raise IndexError(f"Label {label} out of range")
+            results.append((element_node.center.x, element_node.center.y))
+        return results
+
     def click(self, loc: tuple[int, int]|list[int], button: str = "left", clicks: int = 2):
         if isinstance(loc, list):
             x, y = loc[0], loc[1]
