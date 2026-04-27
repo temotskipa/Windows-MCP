@@ -184,6 +184,7 @@ def _run_server(transport: str, host: str, port: int) -> None:
     show_default=True,
 )
 def main(transport, host, port, debug):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     if debug:
         enable_debug()
         logging.getLogger().setLevel(logging.DEBUG)
