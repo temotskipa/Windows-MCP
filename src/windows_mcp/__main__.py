@@ -185,6 +185,9 @@ def _run_server(transport: str, host: str, port: int) -> None:
 )
 def main(transport, host, port, debug):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    if transport == Transport.STDIO.value:
+        # stdout is a pipe in stdio mode — prevent rich from using the Win32 console API
+        os.environ.setdefault("NO_COLOR", "1")
     if debug:
         enable_debug()
         logging.getLogger().setLevel(logging.DEBUG)
