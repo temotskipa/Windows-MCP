@@ -9,6 +9,7 @@ import fnmatch
 import logging
 import shutil
 import os
+from windows_mcp.desktop.utils import is_elevated
 
 from windows_mcp.filesystem.views import (
     MAX_READ_SIZE,
@@ -50,7 +51,10 @@ def read_file(path: str, offset: int | None = None, limit: int | None = None, en
     except UnicodeDecodeError:
         return f'Error: Unable to read file as text with encoding "{encoding}". File may be binary.'
     except PermissionError:
-        return f'Error: Permission denied: {file_path}'
+        msg = f'Error: Permission denied: {file_path}'
+        if not is_elevated():
+            msg += "\n\nHINT: This operation may require an elevated (Administrator) terminal."
+        return msg
     except Exception as e:
         return f'Error reading file: {e}'
 
@@ -71,7 +75,10 @@ def write_file(path: str, content: str, append: bool = False, encoding: str = 'u
         size = file_path.stat().st_size
         return f'{action} {file_path} ({size:,} bytes)'
     except PermissionError:
-        return f'Error: Permission denied: {file_path}'
+        msg = f'Error: Permission denied: {file_path}'
+        if not is_elevated():
+            msg += "\n\nHINT: This operation may require an elevated (Administrator) terminal."
+        return msg
     except Exception as e:
         return f'Error writing file: {e}'
 
@@ -100,7 +107,10 @@ def copy_path(source: str, destination: str, overwrite: bool = False) -> str:
         else:
             return f'Error: Unsupported file type: {src}'
     except PermissionError:
-        return f'Error: Permission denied.'
+        msg = 'Error: Permission denied.'
+        if not is_elevated():
+            msg += "\n\nHINT: This operation may require an elevated (Administrator) terminal."
+        return msg
     except Exception as e:
         return f'Error copying: {e}'
 
@@ -126,7 +136,10 @@ def move_path(source: str, destination: str, overwrite: bool = False) -> str:
         shutil.move(str(src), str(dst))
         return f'Moved: {src} -> {dst}'
     except PermissionError:
-        return f'Error: Permission denied.'
+        msg = 'Error: Permission denied.'
+        if not is_elevated():
+            msg += "\n\nHINT: This operation may require an elevated (Administrator) terminal."
+        return msg
     except Exception as e:
         return f'Error moving: {e}'
 
@@ -154,7 +167,10 @@ def delete_path(path: str, recursive: bool = False) -> str:
         else:
             return f'Error: Unsupported file type: {target}'
     except PermissionError:
-        return f'Error: Permission denied: {target}'
+        msg = f'Error: Permission denied: {target}'
+        if not is_elevated():
+            msg += "\n\nHINT: This operation may require an elevated (Administrator) terminal."
+        return msg
     except Exception as e:
         return f'Error deleting: {e}'
 
@@ -206,7 +222,10 @@ def list_directory(path: str, pattern: str | None = None, recursive: bool = Fals
             header += f' (filter: {pattern})'
         return f'{header}\n' + '\n'.join(entries)
     except PermissionError:
-        return f'Error: Permission denied: {dir_path}'
+        msg = f'Error: Permission denied: {dir_path}'
+        if not is_elevated():
+            msg += "\n\nHINT: This operation may require an elevated (Administrator) terminal."
+        return msg
     except Exception as e:
         return f'Error listing directory: {e}'
 
@@ -249,7 +268,10 @@ def search_files(path: str, pattern: str, recursive: bool = True) -> str:
 
         return f'Search: "{pattern}" in {search_root} ({min(count, MAX_RESULTS)} matches)\n' + '\n'.join(results)
     except PermissionError:
-        return f'Error: Permission denied: {search_root}'
+        msg = f'Error: Permission denied: {search_root}'
+        if not is_elevated():
+            msg += "\n\nHINT: This operation may require an elevated (Administrator) terminal."
+        return msg
     except Exception as e:
         return f'Error searching: {e}'
 
@@ -291,6 +313,9 @@ def get_file_info(path: str) -> str:
 
         return file.to_string()
     except PermissionError:
-        return f'Error: Permission denied: {target}'
+        msg = f'Error: Permission denied: {target}'
+        if not is_elevated():
+            msg += "\n\nHINT: This operation may require an elevated (Administrator) terminal."
+        return msg
     except Exception as e:
         return f'Error getting file info: {e}'

@@ -23,6 +23,7 @@ import ctypes
 import ctypes.wintypes
 import comtypes
 import comtypes.client
+from _ctypes import COMError
 from io import TextIOWrapper
 from typing import Any, Callable, Dict, Generator, List, Tuple, Union
 
@@ -45,6 +46,7 @@ ProcessTime()  # need to call it once if python version <= 3.6
 TreeNode = Any
 from .enums import *  # noqa: E402
 from .enums import _INPUTUnion
+from .exceptions import from_com_error, UIAException  # noqa: E402
 
 
 class _AutomationClient:
@@ -73,9 +75,10 @@ class _AutomationClient:
                 self.ViewWalker = self.IUIAutomation.RawViewWalker
                 # self.ViewWalker = self.IUIAutomation.ControlViewWalker
                 break
-            except Exception as ex:
+            except COMError as ex:
                 if retry + 1 == tryCount:
-                    raise ex
+                    raise from_com_error(ex) from ex
+                time.sleep(0.1)
 
 
 # set Windows dll restype

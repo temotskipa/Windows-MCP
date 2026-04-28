@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from PIL import Image
 
+from windows_mcp.desktop.screenshot import _crop_screenshot  # noqa
 from windows_mcp.desktop.service import Desktop
 from windows_mcp.desktop.views import DesktopState, Size, Status, Window
 from windows_mcp.tree.views import BoundingBox, Center, ScrollElementNode, TreeElementNode, TreeState
@@ -47,7 +48,6 @@ class TestDisplayFiltering:
     def desktop(self):
         with patch.object(Desktop, "__init__", lambda self: None):
             desktop = Desktop()
-            desktop._dxcam_cameras = {}
             return desktop
 
     def test_get_display_union_rect(self, desktop):
@@ -134,20 +134,19 @@ class TestDisplayFiltering:
 
     def test_crop_screenshot_to_display_region(self, desktop):
         screenshot = Image.new("RGB", (3840, 1080), "white")
-        with patch("windows_mcp.desktop.service.uia.GetVirtualScreenRect") as mock_virtual_rect:
+        with patch("windows_mcp.desktop.screenshot.uia.GetVirtualScreenRect") as mock_virtual_rect:
             mock_virtual_rect.return_value = (0, 0, 3840, 1080)
-            cropped = desktop._crop_screenshot(
-                screenshot,
-                Rect(1920, 0, 3840, 1080),
-            )
+            cropped = _crop_screenshot(screenshot, Rect(1920, 0, 3840, 1080))
         assert cropped.size == (1920, 1080)
 
     def test_get_screenshot_uses_display_bbox_for_direct_capture(self, desktop):
         capture_rect = Rect(1920, 0, 3840, 1080)
-        with patch("windows_mcp.desktop.service.dxcam", None):
+        with patch("windows_mcp.desktop.screenshot.dxcam", None):
             with patch("windows_mcp.desktop.screenshot.ImageGrab.grab") as mock_grab:
-                mock_grab.return_value = Image.new("RGB", (1920, 1080), "white")
-                screenshot = desktop.get_screenshot(capture_rect=capture_rect)
+                with patch("windows_mcp.desktop.screenshot.get_screenshot_backend") as mock_screenshot_backend:
+                    mock_grab.return_value = Image.new("RGB", (1920, 1080), "white")
+                    mock_screenshot_backend.return_value = "pillow"  # Ensure we test the Pillow path
+                    screenshot = desktop.get_screenshot(capture_rect=capture_rect)
 
         assert screenshot.size == (1920, 1080)
         assert mock_grab.call_args.kwargs == {
@@ -163,10 +162,10 @@ class TestDisplayFiltering:
         fake_dxcam.create.return_value = fake_camera
 
         monkeypatch.setenv("WINDOWS_MCP_SCREENSHOT_BACKEND", "dxcam")
-        monkeypatch.setattr("windows_mcp.desktop.service.dxcam", fake_dxcam)
         monkeypatch.setattr("windows_mcp.desktop.screenshot.dxcam", fake_dxcam)
+        monkeypatch.setattr("windows_mcp.desktop.screenshot._backend_instances", {})
         monkeypatch.setattr(
-            "windows_mcp.desktop.service.uia.GetMonitorsRect",
+            "windows_mcp.desktop.screenshot.uia.GetMonitorsRect",
             lambda: [Rect(0, 0, 1920, 1080), Rect(1920, 0, 3840, 1080)],
         )
         with patch(
@@ -185,14 +184,13 @@ class TestDisplayFiltering:
         fake_dxcam = MagicMock()
 
         monkeypatch.setenv("WINDOWS_MCP_SCREENSHOT_BACKEND", "dxcam")
-        monkeypatch.setattr("windows_mcp.desktop.service.dxcam", fake_dxcam)
         monkeypatch.setattr("windows_mcp.desktop.screenshot.dxcam", fake_dxcam)
         monkeypatch.setattr(
-            "windows_mcp.desktop.service.uia.GetMonitorsRect",
+            "windows_mcp.desktop.screenshot.uia.GetMonitorsRect",
             lambda: [Rect(0, 0, 1920, 1080), Rect(1920, 0, 3840, 1080)],
         )
         with patch("windows_mcp.desktop.screenshot.ImageGrab.grab") as mock_grab:
-            mock_grab.return_value = Image.new("RGB", (1920, 1080), "white")
+            mock_grab.return_value = Image.new("RGB", (3840, 1080), "white")
             screenshot = desktop.get_screenshot(capture_rect=capture_rect)
 
         assert screenshot.size == (3840, 1080)
@@ -215,9 +213,7 @@ class TestDisplayFiltering:
         fake_mss_module = MagicMock(mss=MagicMock(return_value=fake_mss_ctx))
 
         monkeypatch.setenv("WINDOWS_MCP_SCREENSHOT_BACKEND", "auto")
-        monkeypatch.setattr("windows_mcp.desktop.service.dxcam", None)
         monkeypatch.setattr("windows_mcp.desktop.screenshot.dxcam", None)
-        monkeypatch.setattr("windows_mcp.desktop.service.mss", fake_mss_module)
         monkeypatch.setattr("windows_mcp.desktop.screenshot.mss", fake_mss_module)
         screenshot = desktop.get_screenshot(capture_rect=capture_rect)
 

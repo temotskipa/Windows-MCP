@@ -11,7 +11,7 @@ from fastmcp import Context
 def register(mcp, *, get_desktop, get_analytics):
     @mcp.tool(
         name="Notification",
-        description="Sends a Windows toast notification with a title and message. Useful for alerting the user remotely.",
+        description="Sends a Windows toast notification with a title and message.",
         annotations=ToolAnnotations(
             title="Notification",
             readOnlyHint=False,

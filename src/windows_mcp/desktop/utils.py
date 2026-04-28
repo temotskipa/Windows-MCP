@@ -19,7 +19,18 @@ __all__ = [
     "remove_private_use_chars",
     "check_pid_exists",
     "run_with_graceful_timeout",
+    "is_elevated",
 ]
+
+
+def is_elevated() -> bool:
+    """Check if the current process has administrative privileges."""
+    import ctypes
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin() != 0
+    except (AttributeError, Exception):
+        # Not on Windows or Win32 API unavailable
+        return False
 
 logger = logging.getLogger(__name__)
 

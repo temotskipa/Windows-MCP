@@ -54,7 +54,7 @@ class PostHogAnalytics:
         )
         self._user_id = None
         self.mcp_interaction_id = f"mcp_{int(time.time() * 1000)}_{os.getpid()}"
-        self.mode = os.getenv("MODE", "local").lower()
+
 
         if self.client:
             logger.debug(
@@ -86,7 +86,6 @@ class PostHogAnalytics:
                 properties={
                     "tool_name": tool_name,
                     "session_id": self.mcp_interaction_id,
-                    "mode": self.mode,
                     "process_person_profile": True,
                     **result,
                 },
@@ -107,7 +106,6 @@ class PostHogAnalytics:
                     "exception": str(error),
                     "traceback": str(error) if not hasattr(error, "__traceback__") else str(error),
                     "session_id": self.mcp_interaction_id,
-                    "mode": self.mode,
                     "process_person_profile": True,
                     **context,
                 },

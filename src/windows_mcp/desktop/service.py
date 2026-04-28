@@ -40,9 +40,6 @@ logger.setLevel(logging.INFO)
 
 import windows_mcp.uia as uia  # noqa: E402
 
-dxcam = screenshot_capture.dxcam
-mss = screenshot_capture.mss
-
 # Key name aliases for shortcut keys that differ from UIA SpecialKeyNames
 _KEY_ALIASES = {
     "backspace": "Back",
@@ -83,33 +80,6 @@ class Desktop:
         self.encoding = getpreferredencoding()
         self.tree = Tree(self)
         self.desktop_state = None
-        self._dxcam_cameras: dict[int, object] = {}
-
-    @staticmethod
-    def _get_screenshot_backend() -> str:
-        return screenshot_capture.get_screenshot_backend()
-
-    def _resolve_dxcam_region(
-        self, capture_rect: uia.Rect | None
-    ) -> tuple[int, tuple[int, int, int, int] | None] | None:
-        if dxcam is None:
-            return None
-        return screenshot_capture.resolve_dxcam_region(capture_rect, uia.GetMonitorsRect)
-
-    def _get_dxcam_camera(self, output_idx: int):
-        # Keep method for backward compatibility with tests and callers.
-        return screenshot_capture.get_dxcam_camera(output_idx, self._dxcam_cameras, dxcam_module=dxcam)
-
-    def _capture_with_dxcam(self, capture_rect: uia.Rect) -> Image.Image:
-        return screenshot_capture.capture_with_dxcam(
-            capture_rect,
-            uia.GetMonitorsRect,
-            self._dxcam_cameras,
-            dxcam_module=dxcam,
-        )
-
-    def _capture_with_pillow(self, capture_rect: uia.Rect | None = None) -> Image.Image:
-        return screenshot_capture.capture_with_pillow(capture_rect, self._crop_screenshot)
 
     def get_state(
         self,
@@ -285,6 +255,7 @@ class Desktop:
             screenshot_displays=display_indices,
             tree_state=tree_state,
             screenshot_backend=getattr(self, "_last_screenshot_backend", None) if use_vision else None,
+            capture_sec=time() - start_time,
         )
         if profile_enabled:
             state_build_ms = (perf_counter() - stage_started_at) * 1000
@@ -641,6 +612,26 @@ class Desktop:
             else:
                 raise IndexError(f"Label {label} out of range")
         return element_node.center.x, element_node.center.y
+
+    def get_coordinates_from_labels(self, labels: list[int]) -> list[tuple[int, int]]:
+        """Resolve multiple UI element labels to screen coordinates in bulk."""
+        tree_state = self.desktop_state.tree_state
+        interactive_nodes = tree_state.interactive_nodes
+        scrollable_nodes = tree_state.scrollable_nodes
+        interactive_len = len(interactive_nodes)
+
+        results = []
+        for label in labels:
+            if label < interactive_len:
+                element_node = interactive_nodes[label]
+            else:
+                scroll_idx = label - interactive_len
+                if scroll_idx < len(scrollable_nodes):
+                    element_node = scrollable_nodes[scroll_idx]
+                else:
+                    raise IndexError(f"Label {label} out of range")
+            results.append((element_node.center.x, element_node.center.y))
+        return results
 
     def click(self, loc: tuple[int, int]|list[int], button: str = "left", clicks: int = 2):
         if isinstance(loc, list):
@@ -1050,15 +1041,7 @@ class Desktop:
         )
 
     def get_screenshot(self, capture_rect: uia.Rect | None = None) -> Image.Image:
-        image, used_backend = screenshot_capture.capture(
-            capture_rect=capture_rect,
-            crop_screenshot=self._crop_screenshot,
-            get_monitors_rect=uia.GetMonitorsRect,
-            camera_cache=self._dxcam_cameras,
-            backend=self._get_screenshot_backend(),
-            dxcam_module=dxcam,
-            mss_module=mss,
-        )
+        image, used_backend = screenshot_capture.capture(capture_rect)
         self._last_screenshot_backend = used_backend
         return image
 
@@ -1305,24 +1288,8 @@ class Desktop:
             interactive_nodes=filtered_interactive_nodes,
             scrollable_nodes=filtered_scrollable_nodes,
             dom_informative_nodes=tree_state.dom_informative_nodes if filtered_dom_node else [],
+            capture_sec=tree_state.capture_sec,
         )
-
-    @staticmethod
-    def _build_crop_box(capture_rect: uia.Rect, padding: int = 0) -> tuple[int, int, int, int]:
-        left_offset, top_offset, _, _ = uia.GetVirtualScreenRect()
-        return (
-            capture_rect.left - left_offset + padding,
-            capture_rect.top - top_offset + padding,
-            capture_rect.right - left_offset + padding,
-            capture_rect.bottom - top_offset + padding,
-        )
-
-    def _crop_screenshot(
-        self, screenshot: Image.Image, capture_rect: uia.Rect | None
-    ) -> Image.Image:
-        if capture_rect is None:
-            return screenshot
-        return screenshot.crop(self._build_crop_box(capture_rect))
 
     def send_notification(self, title: str, message: str, app_id: str) -> str:
         """Send a Windows toast notification with a title and message.

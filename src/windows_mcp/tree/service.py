@@ -1,6 +1,7 @@
-from windows_mcp.uia import Control, ComboBoxControl, CheckBoxControl, EditControl, ButtonControl, SliderControl, ScrollPattern, WindowControl, Rect, ExpandCollapseState, ToggleState, PatternId, PropertyId, AccessibleRoleNames, TreeScope, ControlFromHandle
-from windows_mcp.tree.config import INTERACTIVE_CONTROL_TYPE_NAMES, DOCUMENT_CONTROL_TYPE_NAMES, INFORMATIVE_CONTROL_TYPE_NAMES, DEFAULT_ACTIONS, INTERACTIVE_ROLES, THREAD_MAX_RETRIES
-from windows_mcp.tree.views import TreeElementNode, ScrollElementNode, TextElementNode, Center, BoundingBox, TreeState
+from windows_mcp.uia import Control, ComboBoxControl, CheckBoxControl, EditControl, ButtonControl, SliderControl, ScrollPattern, WindowControl, Rect, ExpandCollapseState, ToggleState, PatternId, PropertyId, AccessibleRoleNames, TreeScope, ControlFromHandle, UIADeadElementError, from_com_error
+from _ctypes import COMError
+from windows_mcp.tree.config import INTERACTIVE_CONTROL_TYPE_NAMES, DOCUMENT_CONTROL_TYPE_NAMES, INFORMATIVE_CONTROL_TYPE_NAMES, DEFAULT_ACTIONS, INTERACTIVE_ROLES, THREAD_MAX_RETRIES, STRUCTURAL_CONTROL_TYPE_NAMES
+from windows_mcp.tree.views import TreeElementNode, ScrollElementNode, TextElementNode, Center, BoundingBox, TreeState, SemanticNode, _prune_structural, _reverse_children_order
 from windows_mcp.tree.cache_utils import CacheRequestFactory, CachedControlHelper
 from windows_mcp.tree.utils import random_point_within_bounding_box
 from typing import TYPE_CHECKING,Optional,Any
@@ -38,7 +39,7 @@ def _is_comtypes_variant_ord_typeerror(error: TypeError) -> bool:
 
 if TYPE_CHECKING:
     from windows_mcp.desktop.service import Desktop
-    
+
 class Tree:
     def __init__(self,desktop:'Desktop'):
         self.desktop=weakref.proxy(desktop)
@@ -65,8 +66,8 @@ class Tree:
             windows_handles=[active_window_handle]+other_windows_handles
         else:
             windows_handles=other_windows_handles
-        
-        interactive_nodes,scrollable_nodes,dom_informative_nodes,failed_handles=self.get_window_wise_nodes(windows_handles=windows_handles,active_window_flag=active_window_flag,use_dom=use_dom)
+
+        interactive_nodes,scrollable_nodes,dom_informative_nodes,failed_handles,window_sem_nodes=self.get_window_wise_nodes(windows_handles=windows_handles,active_window_flag=active_window_flag,use_dom=use_dom)
         root_node=TreeElementNode(
             name="Desktop",
             control_type="PaneControl",
@@ -98,6 +99,12 @@ class Tree:
                 dom_node=None
         else:
             dom_node=None
+        # Build semantic tree: desktop → windows → structural/interactive/scrollable
+        desktop_root = SemanticNode(control_type='Desktop', element_type='desktop', name='Desktop', window_name='Desktop')
+        for win_node in window_sem_nodes:
+            desktop_root.add_child(win_node)
+        _prune_structural(desktop_root)
+
         # Detect if tree capture failed for any windows
         status = len(failed_handles) == 0
         if not status:
@@ -115,10 +122,19 @@ class Tree:
                 (end_time - start_time) * 1000,
                 use_dom,
             )
-        logger.debug(f"[Tree] Tree State capture took {end_time - start_time:.2f} seconds")
-        return TreeState(status=status,root_node=root_node,dom_node=dom_node,interactive_nodes=interactive_nodes,scrollable_nodes=scrollable_nodes,dom_informative_nodes=dom_informative_nodes)
+        logger.info(f"[Tree] Tree State capture took {end_time - start_time:.2f} seconds")
+        return TreeState(
+            status=status,
+            root_node=root_node,
+            dom_node=dom_node,
+            interactive_nodes=interactive_nodes,
+            scrollable_nodes=scrollable_nodes,
+            dom_informative_nodes=dom_informative_nodes,
+            capture_sec=end_time - start_time,
+            semantic_tree_root=desktop_root,
+        )
 
-    def get_window_wise_nodes(self,windows_handles:list[int],active_window_flag:bool,use_dom:bool=False) -> tuple[list[TreeElementNode],list[ScrollElementNode],list[TextElementNode],list[int]]:
+    def get_window_wise_nodes(self,windows_handles:list[int],active_window_flag:bool,use_dom:bool=False) -> tuple[list[TreeElementNode],list[ScrollElementNode],list[TextElementNode],list[int],list[SemanticNode]]:
         """Process windows sequentially to avoid COM apartment threading deadlock.
 
         UI Automation requires STA (Single-Threaded Apartment). Using ThreadPoolExecutor
@@ -129,6 +145,7 @@ class Tree:
         """
         interactive_nodes, scrollable_nodes, dom_informative_nodes = [], [], []
         failed_handles = []
+        window_sem_nodes: list[SemanticNode] = []
 
         task_inputs = []
         for handle in windows_handles:
@@ -148,10 +165,12 @@ class Tree:
                 try:
                     result = self.get_nodes(handle, is_browser, wait_time=0.5 * (2 ** (attempt - 1)) if attempt > 0 else 0, use_dom=use_dom)
                     if result:
-                        element_nodes, scroll_nodes, info_nodes = result
+                        element_nodes, scroll_nodes, info_nodes, win_sem_node = result
                         interactive_nodes.extend(element_nodes)
                         scrollable_nodes.extend(scroll_nodes)
                         dom_informative_nodes.extend(info_nodes)
+                        if win_sem_node is not None:
+                            window_sem_nodes.append(win_sem_node)
                     break
                 except Exception as e:
                     retry_counts[handle] = attempt + 1
@@ -172,8 +191,8 @@ class Tree:
                         failed_handles.append(handle)
                         break
 
-        return interactive_nodes, scrollable_nodes, dom_informative_nodes, failed_handles
-    
+        return interactive_nodes, scrollable_nodes, dom_informative_nodes, failed_handles, window_sem_nodes
+
     def iou_bounding_box(self, window_box: Rect, element_box: Rect) -> BoundingBox:
         clipped = element_box.intersect(window_box).intersect(self.screen_box)
         if clipped.right > clipped.left and clipped.bottom > clipped.top:
@@ -241,7 +260,7 @@ class Tree:
                         metadata['value']=value.strip() if value else '(empty)'
                     except Exception:
                         pass
-                    
+
                     try:
                         help_text = node.CachedHelpText
                         if help_text:
@@ -279,21 +298,23 @@ class Tree:
             }))
 
 
-    def tree_traversal(self, node: Control, window_bounding_box:Rect, window_name:str, is_browser:bool, 
-                    interactive_nodes:Optional[list[TreeElementNode]]=None, scrollable_nodes:Optional[list[ScrollElementNode]]=None, 
+    def tree_traversal(self, node: Control, window_bounding_box:Rect, window_name:str, is_browser:bool,
+                    interactive_nodes:Optional[list[TreeElementNode]]=None, scrollable_nodes:Optional[list[ScrollElementNode]]=None,
                     dom_interactive_nodes:Optional[list[TreeElementNode]]=None, dom_informative_nodes:Optional[list[TextElementNode]]=None,
                     is_dom:bool=False, is_dialog:bool=False,
-                    element_cache_req:Optional[Any]=None, children_cache_req:Optional[Any]=None):
+                    element_cache_req:Optional[Any]=None, children_cache_req:Optional[Any]=None,
+                    current_semantic_node:'Optional[SemanticNode]'=None):
         try:
             # Build cached control if caching is enabled
             if not hasattr(node, '_is_cached') and element_cache_req:
                 node = CachedControlHelper.build_cached_control(node, element_cache_req)
-            
+
             # Checks to skip the nodes that are not interactive
             is_offscreen = node.CachedIsOffscreen
             control_type_name = node.CachedControlTypeName
             # class_name = node.CachedClassName
-            
+            semantic_added = False
+
             # Scrollable check
             if scrollable_nodes is not None:
                 if (control_type_name not in (INTERACTIVE_CONTROL_TYPE_NAMES|INFORMATIVE_CONTROL_TYPE_NAMES)) and not is_offscreen:
@@ -312,9 +333,10 @@ class Tree:
                             metadata['horizontal_scroll_percent']=round(scroll_pattern.HorizontalScrollPercent,2) if scroll_pattern.HorizontallyScrollable else 0
                             metadata['vertical_scrollable']=scroll_pattern.VerticallyScrollable
                             metadata['vertical_scroll_percent']=round(scroll_pattern.VerticalScrollPercent,2) if scroll_pattern.VerticallyScrollable else 0
-                            
+
+                            sem_scroll_name = name.strip() or automation_id or localized_control_type.capitalize() or "''"
                             scrollable_nodes.append(ScrollElementNode(**{
-                                'name':name.strip() or automation_id or localized_control_type.capitalize() or "''",
+                                'name':sem_scroll_name,
                                 'control_type':localized_control_type.title(),
                                 'bounding_box':BoundingBox(**{
                                     'left':box.left,
@@ -328,9 +350,23 @@ class Tree:
                                 'window_name':window_name,
                                 'metadata':metadata
                             }))
+                            if current_semantic_node is not None and not is_dom:
+                                current_semantic_node.add_child(SemanticNode(
+                                    control_type=localized_control_type.title(),
+                                    element_type='scrollable',
+                                    name=sem_scroll_name,
+                                    window_name=window_name,
+                                    center=center,
+                                    bounding_box=BoundingBox(
+                                        left=box.left, top=box.top, right=box.right, bottom=box.bottom,
+                                        width=box.width(), height=box.height()
+                                    ),
+                                    metadata=dict(metadata),
+                                ))
+                                semantic_added = True
                     except Exception:
                         pass
-        
+
             # Interactive and Informative checks
             # Pre-calculate common properties
             is_control_element = node.CachedIsControlElement
@@ -338,10 +374,10 @@ class Tree:
             width = element_bounding_box.width()
             height = element_bounding_box.height()
             area = width * height
-            
+
             # Is Visible Check
             is_visible = (area > 0) and (not is_offscreen or control_type_name=="EditControl" or (control_type_name=="ListItemControl" and is_browser)) and is_control_element
-            
+
             if is_visible:
                 is_enabled = node.CachedIsEnabled
                 if is_enabled:
@@ -351,7 +387,7 @@ class Tree:
                     else:
                         #Experimentally, ListItemControl is keyboard focusable
                         is_keyboard_focusable = node.CachedIsKeyboardFocusable
-                    
+
                     # Interactive Check
                     if interactive_nodes is not None:
                         is_interactive = False
@@ -366,35 +402,42 @@ class Tree:
                                 is_role_interactive = AccessibleRoleNames.get(role, "Default") in INTERACTIVE_ROLES
                              except Exception:
                                 is_role_interactive = False
-                             
+
                              # Image check
                              is_image = False
                              if control_type_name == 'ImageControl': # approximated
                                  localized = node.CachedLocalizedControlType
                                  if localized == 'graphic' or not is_keyboard_focusable:
                                      is_image = True
-                             
+
                              if is_role_interactive and (not is_image or is_keyboard_focusable):
                                  is_interactive = True
-                                 
+
                         elif control_type_name == 'GroupControl':
                              if is_browser:
-                                 try:
+                                try:
+                                    has_expand_collapse = node.GetCachedPropertyValue(PropertyId.ExpandCollapseExpandCollapseStateProperty)
+                                    if has_expand_collapse in ExpandCollapseState:
+                                        is_interactive = True
+                                except Exception:
+                                    pass
+
+                                try:
                                     role = node.GetCachedPropertyValue(PropertyId.LegacyIAccessibleRoleProperty)
                                     is_role_interactive = AccessibleRoleNames.get(role, "Default") in INTERACTIVE_ROLES
-                                 except Exception:
+                                except Exception:
                                     is_role_interactive = False
-                                    
-                                 is_default_action = False
-                                 try:
-                                     default_action = node.GetCachedPropertyValue(PropertyId.LegacyIAccessibleDefaultActionProperty)
-                                     if default_action and default_action.title() in DEFAULT_ACTIONS:
-                                         is_default_action = True
-                                 except Exception:
+
+                                is_default_action = False
+                                try:
+                                    default_action = node.GetCachedPropertyValue(PropertyId.LegacyIAccessibleDefaultActionProperty)
+                                    if default_action and default_action.title() in DEFAULT_ACTIONS:
+                                        is_default_action = True
+                                except Exception:
                                     pass
-                                 
-                                 if is_role_interactive and (is_default_action or is_keyboard_focusable):
-                                     is_interactive = True
+
+                                if is_role_interactive and (is_default_action or is_keyboard_focusable):
+                                    is_interactive = True
 
                         if is_interactive:
                             is_focused = node.CachedHasKeyboardFocus
@@ -406,7 +449,7 @@ class Tree:
                             metadata['has_focused']=is_focused
                             if accelerator_key:
                                 metadata['shortcut']=accelerator_key
-                            
+
                             try:
                                 help_text = node.CachedHelpText
                                 if help_text:
@@ -440,7 +483,7 @@ class Tree:
                                         metadata['is_password']=True
                                 except Exception:
                                     pass
-                            
+
                             if isinstance(node,ComboBoxControl):
                                 try:
                                     control_state=node.GetCachedPropertyValue(PropertyId.ExpandCollapseExpandCollapseStateProperty)
@@ -456,7 +499,7 @@ class Tree:
                                 except Exception:
                                     pass
 
-                                try: 
+                                try:
                                     can_select_multiple=node.GetCachedPropertyValue(PropertyId.SelectionCanSelectMultipleProperty)
                                     metadata['is_selection_required']=can_select_multiple
                                 except Exception:
@@ -522,6 +565,17 @@ class Tree:
                                     'metadata':metadata
                                 })
                                 interactive_nodes.append(tree_node)
+                                if current_semantic_node is not None:
+                                    current_semantic_node.add_child(SemanticNode(
+                                        control_type=tree_node.control_type,
+                                        element_type='interactive',
+                                        name=tree_node.name,
+                                        window_name=tree_node.window_name,
+                                        center=tree_node.center,
+                                        bounding_box=tree_node.bounding_box,
+                                        metadata=dict(tree_node.metadata),
+                                    ))
+                                    semantic_added = True
 
                     # Informative Check
                     if dom_informative_nodes is not None:
@@ -532,28 +586,46 @@ class Tree:
                               is_image_check = False
                               if control_type_name == 'ImageControl':
                                    localized = node.CachedLocalizedControlType
-                                   
+
                                    if not is_keyboard_focusable:
                                         if localized == 'graphic':
                                              is_image_check = True
                                         else:
                                              is_image_check = True
-                                   elif localized == 'graphic': 
+                                   elif localized == 'graphic':
                                         is_image_check = True
 
                               if not is_image_check:
                                   is_text = True
-                         
+
                          if is_text:
                              if is_browser and is_dom:
                                  name = node.CachedName
                                  dom_informative_nodes.append(TextElementNode(
                                      text=name.strip(),
                                  ))
-            
+
+            # Semantic tree: promote named structural containers to tree nodes
+            semantic_parent = current_semantic_node
+            if (current_semantic_node is not None and not is_dom and not is_offscreen
+                    and not semantic_added and control_type_name in STRUCTURAL_CONTROL_TYPE_NAMES):
+                try:
+                    struct_name = node.CachedName.strip()
+                    if struct_name:
+                        struct_node = SemanticNode(
+                            control_type=node.CachedLocalizedControlType.title(),
+                            element_type='structural',
+                            name=struct_name,
+                            window_name=window_name,
+                        )
+                        current_semantic_node.add_child(struct_node)
+                        semantic_parent = struct_node
+                except Exception:
+                    pass
+
             # Phase 3: Cached Children Retrieval
             children = CachedControlHelper.get_cached_children(node, children_cache_req)
-            
+
             # Recursively traverse the tree the right to left for normal apps and for DOM traverse from left to right
             for child in (children if is_dom else reversed(children)):
                 try:
@@ -565,7 +637,7 @@ class Tree:
                         height=bounding_box.height())
                         self.dom=child
                         # enter DOM subtree
-                        self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=True, is_dialog=is_dialog, element_cache_req=element_cache_req, children_cache_req=children_cache_req)
+                        self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=True, is_dialog=is_dialog, element_cache_req=element_cache_req, children_cache_req=children_cache_req, current_semantic_node=None)
                     # Check if the child is a dialog
                     elif isinstance(child,WindowControl):
                         if not child.CachedIsOffscreen:
@@ -581,14 +653,14 @@ class Tree:
                                     is_modal = child.GetCachedPropertyValue(PropertyId.WindowIsModalProperty)
                                 except Exception:
                                     is_modal = False
-                                    
+
                                 if is_modal:
                                     interactive_nodes.clear()
                         # enter dialog subtree
-                        self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=is_dom, is_dialog=True, element_cache_req=element_cache_req, children_cache_req=children_cache_req)
+                        self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=is_dom, is_dialog=True, element_cache_req=element_cache_req, children_cache_req=children_cache_req, current_semantic_node=semantic_parent)
                     else:
                         # normal non-dialog children
-                        self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=is_dom, is_dialog=is_dialog, element_cache_req=element_cache_req, children_cache_req=children_cache_req)
+                        self.tree_traversal(child, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=is_dom, is_dialog=is_dialog, element_cache_req=element_cache_req, children_cache_req=children_cache_req, current_semantic_node=semantic_parent)
                 except TypeError as e:
                     if not _is_comtypes_variant_ord_typeerror(e):
                         raise
@@ -623,29 +695,38 @@ class Tree:
                 return "Context Menu"
             case _:
                 return window_name
-    
-    def get_nodes(self, handle: int, is_browser:bool=False, wait_time:float=0, use_dom:bool=False) -> tuple[list[TreeElementNode],list[ScrollElementNode],list[TextElementNode]]:
+
+    def get_nodes(self, handle: int, is_browser:bool=False, wait_time:float=0, use_dom:bool=False) -> tuple[list[TreeElementNode],list[ScrollElementNode],list[TextElementNode],Optional[SemanticNode]]:
         if wait_time > 0:
             sleep(wait_time)
         try:
             node = ControlFromHandle(handle)
             if not node:
-                 raise Exception("Failed to create Control from handle")
+                 raise RuntimeError(f"Failed to create Control from window handle {handle:#x}")
 
             # Create fresh cache requests for this traversal session
             element_cache_req = CacheRequestFactory.create_tree_traversal_cache()
             element_cache_req.TreeScope = TreeScope.TreeScope_Element
-            
+
             children_cache_req = CacheRequestFactory.create_tree_traversal_cache()
             children_cache_req.TreeScope = TreeScope.TreeScope_Element | TreeScope.TreeScope_Children
 
             window_bounding_box=node.BoundingRectangle
-            
+
             interactive_nodes, dom_interactive_nodes, dom_informative_nodes, scrollable_nodes = [], [], [], []
             window_name=node.Name.strip()
             window_name=self.app_name_correction(window_name)
 
-            self.tree_traversal(node, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=False, is_dialog=False, element_cache_req=element_cache_req, children_cache_req=children_cache_req)
+            window_sem_node: Optional[SemanticNode] = None
+            if not is_browser:
+                window_sem_node = SemanticNode(
+                    control_type='Window',
+                    element_type='window',
+                    name=window_name,
+                    window_name=window_name,
+                )
+
+            self.tree_traversal(node, window_bounding_box, window_name, is_browser, interactive_nodes, scrollable_nodes, dom_interactive_nodes, dom_informative_nodes, is_dom=False, is_dialog=False, element_cache_req=element_cache_req, children_cache_req=children_cache_req, current_semantic_node=window_sem_node)
             logger.debug(f'Window name:{window_name}')
             logger.debug(f'Interactive nodes:{len(interactive_nodes)}')
             if is_browser:
@@ -653,14 +734,51 @@ class Tree:
                 logger.debug(f'DOM informative nodes:{len(dom_informative_nodes)}')
             logger.debug(f'Scrollable nodes:{len(scrollable_nodes)}')
 
+            if not is_browser and window_sem_node is not None:
+                # tree_traversal visits reversed(children) for native apps — fix ordering now
+                _reverse_children_order(window_sem_node)
+            elif is_browser:
+                # Build browser window semantic tree post-hoc from flat DOM lists
+                window_sem_node = SemanticNode(
+                    control_type='Window',
+                    element_type='window',
+                    name=window_name,
+                    window_name=window_name,
+                )
+                for n in dom_interactive_nodes:
+                    window_sem_node.add_child(SemanticNode(
+                        control_type=n.control_type,
+                        element_type='interactive',
+                        name=n.name,
+                        window_name=n.window_name,
+                        center=n.center,
+                        bounding_box=n.bounding_box,
+                        metadata=dict(n.metadata),
+                    ))
+                for text_node in dom_informative_nodes:
+                    if text_node.text:
+                        window_sem_node.add_child(SemanticNode(
+                            control_type='Text',
+                            element_type='informative',
+                            name=text_node.text,
+                            window_name=window_name,
+                        ))
+
             if use_dom:
                 if is_browser:
-                    return (dom_interactive_nodes, scrollable_nodes, dom_informative_nodes)
+                    return (dom_interactive_nodes, scrollable_nodes, dom_informative_nodes, window_sem_node)
                 else:
-                    return ([], [], [])
+                    return ([], [], [], None)
             else:
                 interactive_nodes.extend(dom_interactive_nodes)
-                return (interactive_nodes,scrollable_nodes,dom_informative_nodes)
+                return (interactive_nodes, scrollable_nodes, dom_informative_nodes, window_sem_node)
+        except COMError as e:
+            uia_exc = from_com_error(e)
+            if isinstance(uia_exc, UIADeadElementError):
+                logger.debug(f"Window {handle:#x} is no longer accessible (dead element)")
+            else:
+                logger.error(f"UIA error for handle {handle:#x}: {uia_exc}")
+            raise uia_exc from e
         except Exception as e:
             logger.error(f"Error getting nodes for handle {handle}: {e}")
             raise

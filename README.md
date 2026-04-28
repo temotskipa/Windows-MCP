@@ -141,12 +141,41 @@ npm install -g @anthropic-ai/mcpb
 
   **Claude Desktop MSIX (Windows Store)**
 
-  The MSIX-packaged Claude Desktop virtualizes `%APPDATA%`. Config lives at:
-  `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json`
-  (not `%APPDATA%\Claude\`). The "Edit Config" button may open the wrong file.
+  The MSIX-packaged Claude Desktop (Microsoft Store version) virtualizes `%APPDATA%`. This causes two main issues:
+  1. The config file is located at: `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json` (not `%APPDATA%\Claude\`).
+  2. Automatic installation from the "Claude Directory" will fail because the `${__dirname}` variable resolves to the incorrect (non-virtualized) path.
 
-  Electron apps also do not inherit PATH, so `uv`/`uvx` can fail with `spawn ENOENT`. Use the **full absolute path** to `uv.exe`:
+  **To configure Windows-MCP on the Windows Store version of Claude:**
+  
+  You must manually edit the configuration file. Note that Electron apps in the MSIX sandbox do not inherit the system `PATH`, so you must use the **full absolute path** to `uvx.exe` (or `uv.exe`).
 
+  **Option A: Using pre-installed executable**
+  1. In a terminal, run: `uv tool install windows-mcp`
+  2. Use the generated executable in your config:
+  ```json
+  {
+    "mcpServers": {
+      "windows-mcp": {
+        "command": "C:\\Users\\<user>\\.local\\bin\\windows-mcp.exe",
+        "args": []
+      }
+    }
+  }
+  ```
+
+  **Option B: Using uvx**
+  ```json
+  {
+    "mcpServers": {
+      "windows-mcp": {
+        "command": "C:\\Users\\<user>\\.local\\bin\\uvx.exe",
+        "args": ["windows-mcp"]
+      }
+    }
+  }
+  ```
+
+  **Option C: Install from Source**
   ```json
   {
     "mcpServers": {
@@ -154,7 +183,7 @@ npm install -g @anthropic-ai/mcpb
         "command": "C:\\Users\\<user>\\.local\\bin\\uv.exe",
         "args": [
           "--directory",
-          "C:\\Users\\<user>\\AppData\\Local\\Packages\\Claude_pzs8sxrjxfjjc\\LocalCache\\Roaming\\Claude\\Claude Extensions\\ant.dir.cursortouch.windows-mcp",
+          "C:\\path\\to\\Windows-MCP",
           "run",
           "windows-mcp"
         ]
@@ -163,7 +192,7 @@ npm install -g @anthropic-ai/mcpb
   }
   ```
 
-  Replace `<user>` with your username. To find `uv.exe`, run `where uv` in a terminal; common location is `%USERPROFILE%\.local\bin\uv.exe`. For PyPI install, use `args: ["run", "windows-mcp"]` instead of `--directory`/path. Save as **UTF-8 without BOM** (PowerShell `Set-Content -Encoding UTF8` adds a BOM that breaks the JSON parser).
+  Replace `<user>` with your Windows username. To find the correct paths, run `where uvx`, `where windows-mcp`, or `where uv`. Fully quit Claude Desktop (Tray → Quit) and reopen after saving the config.
 
   For additional Claude Desktop integration troubleshooting, see the [MCP documentation](https://modelcontextprotocol.io/quickstart/server#claude-for-desktop-integration-issues).
 </details>
@@ -316,15 +345,74 @@ args=[
   5. Rerun Codex CLI in terminal. Enjoy 🥳
 </details>
 
+<details>
+  <summary>Install in Claude Code</summary>
+
+  1. Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview):
+
+```shell
+npm install -g @anthropic-ai/claude-code
+```
+
+  2. Configure the server:
+
+  **Option A: Install from PyPI (Recommended)**
+
+  Use `uvx` to run the latest version directly from PyPI.
+
+  ```shell
+  claude mcp add --transport stdio windows-mcp -- uvx windows-mcp
+  ```
+
+  **Option B: Install from Source**
+
+  1. Clone the repository:
+  ```shell
+  git clone https://github.com/CursorTouch/Windows-MCP.git
+  cd Windows-MCP
+  ```
+
+  2. Run the following command in your terminal:
+  ```shell
+  claude mcp add --transport stdio windows-mcp -- uv --directory "<path>" run windows-mcp
+  ```
+
+  *Note: To make the server available across all projects, add `--scope user` to the command.*
+
+  3. Rerun Claude Code in terminal. Enjoy 🥳
+
+  **Note:** On Windows, if you encounter "Connection closed" errors, use the full path to `uvx.exe`:
+
+  ```shell
+  claude mcp add --transport stdio windows-mcp -- C:\Users\<user>\.local\bin\uvx.exe windows-mcp
+  ```
+
+  To verify the server is registered, run `claude mcp list`. Inside Claude Code, use `/mcp` to check server status.
+
+  **WSL (Windows Subsystem for Linux)**
+
+  If you run Claude Code from WSL, the MCP server must still execute on the Windows side (it needs Windows APIs for UI automation). Use `powershell.exe` as the command to bridge WSL and Windows:
+
+  1. Install `uv` on **Windows** (from a PowerShell terminal):
+  ```powershell
+  irm https://astral.sh/uv/install.ps1 | iex
+  ```
+
+  2. From your **WSL terminal**, register the server:
+  ```shell
+  claude mcp add windows-mcp --transport stdio -s user -- powershell.exe -Command "C:\Users\<user>\.local\bin\uvx.exe windows-mcp"
+  ```
+
+  Replace `<user>` with your Windows username. The `-s user` flag makes the server available across all projects.
+
+  3. Restart Claude Code and verify with `/mcp`.
+</details>
+
 ---
 
-## 🖥️ Modes
+## 🖥️ Running Windows-MCP
 
-Windows-MCP supports two operating modes: **Local** (default) and **Remote**.
-
-### Local Mode (Default)
-
-In local mode, Windows-MCP runs directly on your Windows machine and exposes its tools to the connected MCP client. This is the standard setup for personal use.
+Windows-MCP runs directly on your Windows machine and exposes its tools to the connected MCP client.
 
 ```shell
 # Runs with stdio transport (default)
@@ -336,40 +424,6 @@ uvx windows-mcp --transport streamable-http --host localhost --port 8000
 ```
 
 Optional environment variables can be set to customize behavior — see [Environment Variables](#-environment-variables) below.
-
-### Remote Mode
-
-In remote mode, Windows-MCP acts as a **proxy** that connects to the [windowsmcp.io](https://windowsmcp.io) enabling cloud-hosted Windows automation. This is designed for scenarios where the MCP client is remote and connects through the dashboard, which routes requests to a Windows VM running Windows-MCP.
-
-When installed as a desktop extension, remote mode should stay on that lightweight proxy path and must not require local Windows automation dependencies to build before startup.
-
-**Required environment variables:**
-
-| Variable | Description |
-|---|---|
-| `MODE` | Set to `remote` |
-| `SANDBOX_ID` | The sandbox/VM identifier from the dashboard |
-| `API_KEY` | Your Windows-MCP API key |
-
-**Example configuration:**
-
-```json
-{
-  "mcpServers": {
-    "windows-mcp": {
-      "command": "uvx",
-      "args": [
-        "windows-mcp"
-      ],
-      "env": {
-        "MODE": "remote",
-        "SANDBOX_ID": "your-sandbox-id",
-        "API_KEY": "your-api-key"
-      }
-    }
-  }
-}
-```
 
 ### Transport Options
 
@@ -399,15 +453,13 @@ All variables are optional unless noted. Set them via the `env` key in `claude_d
 |---|---|---|
 | `ANONYMIZED_TELEMETRY` | `true` | Set to `false` to disable anonymous usage telemetry. No personal data, tool arguments, or outputs are ever collected regardless of this setting. |
 
-### Remote Mode
+### Debug
 
 | Variable | Default | Description |
 |---|---|---|
-| `MODE` | `local` | Set to `remote` to run as a proxy to [windowsmcp.io](https://windowsmcp.io). |
-| `SANDBOX_ID` | _(none)_ | **Required for remote mode.** The sandbox/VM identifier from the dashboard. |
-| `API_KEY` | _(none)_ | **Required for remote mode.** Your Windows-MCP API key. |
+| `WINDOWS_MCP_DEBUG` | `false` | Set to `1`, `true`, `yes`, or `on` to enable debug mode, which sets the log level to DEBUG for verbose output. Also available as the `--debug` CLI flag. |
 
-**Example `claude_desktop_config.json` with all local-mode options:**
+**Example `claude_desktop_config.json` configuration:**
 
 ```json
 {
@@ -421,7 +473,8 @@ All variables are optional unless noted. Set them via the `env` key in `claude_d
         "WINDOWS_MCP_SCREENSHOT_SCALE": "0.5",
         "WINDOWS_MCP_SCREENSHOT_BACKEND": "auto",
         "WINDOWS_MCP_PROFILE_SNAPSHOT": "false",
-        "ANONYMIZED_TELEMETRY": "true"
+        "ANONYMIZED_TELEMETRY": "true",
+        "WINDOWS_MCP_DEBUG": "false"
       }
     }
   }
@@ -445,12 +498,40 @@ MCP Client can access the following tools to interact with Windows:
 - `App`: To launch an application from the start menu, resize or move the window and switch between apps.
 - `Shell`: To execute PowerShell commands.
 - `Scrape`: To scrape the entire webpage for information.
-- `MultiSelect`: Select multiple items (files, folders, checkboxes) with optional Ctrl key.
-- `MultiEdit`: Enter text into multiple input fields at specified coordinates.
+- `MultiSelect`: Select multiple items (files, folders, checkboxes) with optional Ctrl key. Uses bulk label-to-coordinate resolution when labels are provided.
+- `MultiEdit`: Enter text into multiple input fields at specified coordinates. Uses bulk label-to-coordinate resolution when labels are provided.
 - `Clipboard`: Read or set Windows clipboard content.
 - `Process`: List running processes or terminate them by PID or name.
 - `Notification`: Send a Windows toast notification with a title and message.
 - `Registry`: Read, write, delete, or list Windows Registry values and keys.
+
+### Performance Notes
+
+`MultiSelect` and `MultiEdit` now resolve label-based coordinates in bulk through `Desktop.get_coordinates_from_labels`, which avoids repeated lookups against the desktop tree state.
+
+PR benchmark (mock-based):
+
+- Iterative: `0.003578s`
+- Bulk: `0.002238s`
+- Improvement: `~37.45%`
+
+In a local Windows benchmark with a synthetic tree state and 35,000 label resolutions per run, the measured results were:
+
+- Iterative: `0.005895s`
+- Bulk: `0.002825s`
+- Improvement: `52.09%`
+
+In a local desktop runtime check (live Windows state capture path), the measured averages were:
+
+- FindElement-like (`use_vision=False`, `use_annotation=False`): `0.5507s`
+- Snapshot-like (`use_vision=True`, `use_annotation=True`): `0.6717s`
+- Relative gain for lighter lookup path: `~18.01%`
+
+You can reproduce the comparison with:
+
+```shell
+python scripts/benchmark_multi_coordinates.py
+```
 
 ## 🤝 Connect with Us
 Stay updated and join our community:

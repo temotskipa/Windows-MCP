@@ -87,6 +87,7 @@ def capture_desktop_state(
 
     interactive_elements = desktop_state.tree_state.interactive_elements_to_string()
     scrollable_elements = desktop_state.tree_state.scrollable_elements_to_string()
+    semantic_tree = desktop_state.tree_state.semantic_tree_to_string()
     windows = desktop_state.windows_to_string()
     active_window = desktop_state.active_window_to_string()
     active_desktop = desktop_state.active_desktop_to_string()
@@ -121,6 +122,7 @@ def capture_desktop_state(
         "desktop_state": desktop_state,
         "interactive_elements": interactive_elements,
         "scrollable_elements": scrollable_elements,
+        "semantic_tree": semantic_tree,
         "windows": windows,
         "active_window": active_window,
         "active_desktop": active_desktop,
@@ -138,6 +140,7 @@ def build_snapshot_response(
     desktop_state = capture_result["desktop_state"]
     interactive_elements = capture_result["interactive_elements"]
     scrollable_elements = capture_result["scrollable_elements"]
+    semantic_tree = capture_result["semantic_tree"]
     windows = capture_result["windows"]
     active_window = capture_result["active_window"]
     active_desktop = capture_result["active_desktop"]
@@ -149,6 +152,7 @@ def build_snapshot_response(
     # These characters can cause display issues, so we strip them out before rendering.
     interactive_elements = remove_private_use_chars(interactive_elements)
     scrollable_elements = remove_private_use_chars(scrollable_elements)
+    semantic_tree = remove_private_use_chars(semantic_tree)
 
     metadata_text = f"Cursor Position: {desktop_state.cursor_position}\n"
     if desktop_state.screenshot_original_size:
@@ -187,11 +191,8 @@ def build_snapshot_response(
     if include_ui_details:
         response_text += dedent(f'''
 
-    List of Interactive Elements:
-    {interactive_elements or "No interactive elements found."}
-
-    List of Scrollable Elements:
-    {scrollable_elements or 'No scrollable elements found.'}''')
+    UI Tree:
+    {semantic_tree or "No elements found."}''')
 
     response = [response_text]
     if screenshot_bytes:

@@ -1,9 +1,9 @@
 {
-  "manifest_version": "0.3",
+  "manifest_version": "0.4",
   "name": "Windows-MCP",
-  "version": "0.7.1",
+  "version": "0.7.4",
   "description": "MCP Server that enables Claude to interact with Windows OS",
-  "long_description": "Windows-MCP is an open-source project that enables seamless integration between AI agents and the Windows operating system. Acting as an MCP server, it bridges the gap between large language models (LLMs) and the Windows OS, allowing agents to perform tasks such as **file navigation, application control, UI interaction, QA testing, and more**.\n\n**KEY FEATURES**\n- **Seamless Windows Integration**: Interacts natively with Windows UI elements, opens applications, controls windows, simulates user input, and more.\n- **Use Any LLM (Vision Optional)**: Does not rely on traditional computer vision techniques or fine-tuned models. Works with any LLM, reducing complexity and setup time.\n- **Rich Toolset for UI Automation**: Includes tools for keyboard and mouse control, window management, and capturing window or UI state.\n- **Lightweight & Open-Source**: Minimal dependencies with full source code available under the MIT license.\n- **Customizable & Extendable**: Easily adapt or extend tools to suit custom automation workflows or AI integrations.\n- **Real-Time Interaction**: Typical latency between actions ranges from `0.2` to `0.9` seconds, depending on system load, active applications, and LLM inference speed.\n\n**MINIMUM REQUIREMENTS**\n- **Python 3.13+**\n- **UV Package Manager** — `curl -LsSf https://astral.sh/uv/install.sh | sh`\n",
+  "long_description": "Windows-MCP is an open-source project that enables seamless integration between AI agents and the Windows operating system. Acting as an MCP server, it bridges the gap between large language models (LLMs) and the Windows OS, allowing agents to perform tasks such as **file navigation, application control, UI interaction, QA testing, and more**.\n\n**KEY FEATURES**\n- **Seamless Windows Integration**: Interacts natively with Windows UI elements, opens applications, controls windows, simulates user input, and more.\n- **Use Any LLM (Vision Optional)**: Does not rely on traditional computer vision techniques or fine-tuned models. Works with any LLM, reducing complexity and setup time.\n- **Rich Toolset for UI Automation**: Includes tools for keyboard and mouse control, window management, and capturing window or UI state.\n- **Lightweight & Open-Source**: Minimal dependencies with full source code available under the MIT license.\n- **Customizable & Extendable**: Easily adapt or extend tools to suit custom automation workflows or AI integrations.\n- **Real-Time Interaction**: Typical latency between actions ranges from `0.2` to `0.9` seconds, depending on system load, active applications, and LLM inference speed.\n\n**MINIMUM REQUIREMENTS**\n- **Python 3.13+**\n",
   "author": {
     "name": "CursorTouch",
     "url": "https://cursortouch.com/"
@@ -17,7 +17,7 @@
     "assets/screenshots/screenshot_3.png"
   ],
   "server": {
-    "type": "python",
+    "type": "uv",
     "entry_point": "src/windows_mcp/__main__.py",
     "mcp_config": {
       "command": "uv",
@@ -29,34 +29,13 @@
       ],
       "env": {
         "ANONYMIZED_TELEMETRY": "${user_config.anonymized_telemetry}",
-        "MODE": "${user_config.mode}",
-        "SANDBOX_ID": "${user_config.sandbox_id}",
-        "API_KEY": "${user_config.api_key}",
         "WINDOWS_MCP_PROFILE_SNAPSHOT": "${user_config.profile_snapshot}",
-        "WINDOWS_MCP_SCREENSHOT_BACKEND": "${user_config.screenshot_backend}"
+        "WINDOWS_MCP_SCREENSHOT_BACKEND": "${user_config.screenshot_backend}",
+        "WINDOWS_MCP_DEBUG": "${user_config.debug}"
       }
     }
   },
   "user_config": {
-    "mode": {
-      "type": "string",
-      "title": "Mode (local or remote)",
-      "description": "Set to 'local' to run directly on your machine, or 'remote' to use cloud-hosted Windows automation via windowsmcp.io. In remote mode the extension acts only as a lightweight proxy, so no local Windows automation build should be required. Remote mode requires a Sandbox ID and API Key from the dashboard at windowsmcp.io.",
-      "required": false,
-      "default": "local"
-    },
-    "sandbox_id": {
-      "type": "string",
-      "title": "Sandbox ID",
-      "description": "The sandbox/VM identifier from the windowsmcp.io. Required when mode is set to 'remote'.",
-      "required": false
-    },
-    "api_key": {
-      "type": "string",
-      "title": "API Key",
-      "description": "Your API key from the windowsmcp.io. Required when mode is set to 'remote'.",
-      "required": false
-    },
     "anonymized_telemetry": {
       "type": "boolean",
       "title": "Anonymized Telemetry",
@@ -76,13 +55,14 @@
       "title": "Screenshot Backend",
       "description": "The engine used to capture screenshots. 'auto' automatically selects the fastest available backend (DXGI -> MSS -> Pillow). Use 'pillow' if you encounter capture issues.",
       "required": false,
-      "default": "auto",
-      "enum": [
-        "auto",
-        "dxcam",
-        "mss",
-        "pillow"
-      ]
+      "default": "auto"
+    },
+    "debug": {
+      "type": "boolean",
+      "title": "Debug Mode",
+      "description": "Enable debug mode to provide verbose logging for troubleshooting.",
+      "required": false,
+      "default": false
     }
   },
   "tools": [
@@ -152,7 +132,7 @@
     },
     {
       "name": "Notification",
-      "description": "Sends a Windows toast notification with a title and message. Useful for alerting the user remotely."
+      "description": "Sends a Windows toast notification with a title and message."
     },
     {
       "name": "Registry",

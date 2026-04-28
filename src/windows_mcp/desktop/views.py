@@ -67,6 +67,7 @@ class DesktopState:
     screenshot_displays: list[int] | None = None
     screenshot_backend: str | None = None
     tree_state: TreeState | None = None
+    capture_sec: float = 0.0
 
     def active_desktop_to_string(self):
         desktop_name = self.active_desktop.get("name")

@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
-from windows_mcp.auth import AuthClient
+from windows_mcp.config import is_debug, enable_debug
 from fastmcp import FastMCP
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from dataclasses import dataclass, field
 from textwrap import dedent
 from enum import Enum
@@ -16,7 +18,7 @@ desktop: Any | None = None
 watchdog: Any | None = None
 analytics: Any | None = None
 screen_size: Any | None = None
-_local_mcp: FastMCP | None = None
+_mcp: FastMCP | None = None
 
 instructions = dedent("""
 Windows MCP server provides tools to interact directly with the Windows desktop,
@@ -32,12 +34,50 @@ def _get_analytics():
     return analytics
 
 
-def _build_local_mcp() -> FastMCP:
-    """Create the local desktop-control server only when local mode is used."""
-    global _local_mcp
+def _http_middleware() -> list:
+    """Return ASGI middleware for HTTP transports including CORS and OPTIONS handling."""
+    return [
+        Middleware(OptionsMiddleware),
+        Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]),
+    ]
 
-    if _local_mcp is not None:
-        return _local_mcp
+
+class OptionsMiddleware:
+    """ASGI middleware that intercepts OPTIONS requests and returns 200 OK."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "http" and scope["method"] == "OPTIONS":
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [
+                        [b"content-length", b"0"],
+                        [b"access-control-allow-origin", b"*"],
+                        [b"access-control-allow-methods", b"*"],
+                        [b"access-control-allow-headers", b"*"],
+                    ],
+                }
+            )
+            await send(
+                {
+                    "type": "http.response.body",
+                    "body": b"",
+                }
+            )
+        else:
+            await self.app(scope, receive, send)
+
+
+def _build_mcp() -> FastMCP:
+    """Create the MCP server instance."""
+    global _mcp
+
+    if _mcp is not None:
+        return _mcp
 
     from windows_mcp.analytics import PostHogAnalytics
     from windows_mcp.desktop.service import Desktop
@@ -59,21 +99,23 @@ def _build_local_mcp() -> FastMCP:
         try:
             watchdog.start()
             await asyncio.sleep(1)  # Simulate startup latency
+            logger.debug("Server started, entering main loop")
             yield
         finally:
+            logger.debug("Shutting down: stopping watchdog and analytics")
             if watchdog:
                 watchdog.stop()
             if analytics:
                 await analytics.close()
 
-    _local_mcp = FastMCP(name="windows-mcp", instructions=instructions, lifespan=lifespan)
-    register_all(_local_mcp, get_desktop=_get_desktop, get_analytics=_get_analytics)
-    return _local_mcp
+    _mcp = FastMCP(name="windows-mcp", instructions=instructions, lifespan=lifespan)
+    register_all(_mcp, get_desktop=_get_desktop, get_analytics=_get_analytics)
+    return _mcp
 
 
 def __getattr__(name: str):
     if name in {"state_tool", "screenshot_tool"}:
-        _build_local_mcp()
+        _build_mcp()
         from windows_mcp.tools import snapshot
 
         tool = getattr(snapshot, name)
@@ -83,71 +125,42 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def _get_remote_proxy_types():
-    from fastmcp.client.transports import StreamableHttpTransport
-    from fastmcp.server.providers.proxy import ProxyClient
-
-    return StreamableHttpTransport, ProxyClient
-
-
-@dataclass
-class Config:
-    mode: str
-    sandbox_id: str = field(default='')
-    api_key: str = field(default='')
 
 
 class Transport(Enum):
     STDIO = "stdio"
     SSE = "sse"
     STREAMABLE_HTTP = "streamable-http"
-    def __str__(self):
-        return self.value
 
-class Mode(Enum):
-    LOCAL = "local"
-    REMOTE = "remote"
     def __str__(self):
         return self.value
 
 
-def _run_local_mode(transport: str, host: str, port: int) -> None:
-    local_mcp = _build_local_mcp()
+def _run_server(transport: str, host: str, port: int) -> None:
+    mcp = _build_mcp()
     match transport:
         case Transport.STDIO.value:
-            local_mcp.run(transport=Transport.STDIO.value, show_banner=False)
+            mcp.run(transport=Transport.STDIO.value, show_banner=False)
         case Transport.SSE.value | Transport.STREAMABLE_HTTP.value:
-            local_mcp.run(transport=transport, host=host, port=port, show_banner=False)
+            mcp.run(
+                transport=transport,
+                host=host,
+                port=port,
+                show_banner=False,
+                middleware=_http_middleware(),
+            )
         case _:
             raise ValueError(f"Invalid transport: {transport}")
 
-
-def _run_remote_mode(config: Config, transport: str, host: str, port: int) -> None:
-    if not config.sandbox_id:
-        raise ValueError("SANDBOX_ID is required for MODE: remote")
-    if not config.api_key:
-        raise ValueError("API_KEY is required for MODE: remote")
-
-    client = AuthClient(api_key=config.api_key, sandbox_id=config.sandbox_id)
-    client.authenticate()
-    streamable_http_transport, proxy_client = _get_remote_proxy_types()
-    backend = streamable_http_transport(url=client.proxy_url, headers=client.proxy_headers)
-    proxy_mcp = FastMCP.as_proxy(proxy_client(backend), name="windows-mcp")
-
-    match transport:
-        case Transport.STDIO.value:
-            proxy_mcp.run(transport=Transport.STDIO.value, show_banner=False)
-        case Transport.SSE.value | Transport.STREAMABLE_HTTP.value:
-            proxy_mcp.run(transport=transport, host=host, port=port, show_banner=False)
-        case _:
-            raise ValueError(f"Invalid transport: {transport}")
 
 @click.command()
 @click.option(
     "--transport",
     help="The transport layer used by the MCP server.",
-    type=click.Choice([Transport.STDIO.value,Transport.SSE.value,Transport.STREAMABLE_HTTP.value]),
-    default='stdio'
+    type=click.Choice(
+        [Transport.STDIO.value, Transport.SSE.value, Transport.STREAMABLE_HTTP.value]
+    ),
+    default="stdio",
 )
 @click.option(
     "--host",
@@ -163,20 +176,33 @@ def _run_remote_mode(config: Config, transport: str, host: str, port: int) -> No
     type=int,
     show_default=True,
 )
+@click.option(
+    "--debug",
+    help="Enable debug mode to provide verbose logging for troubleshooting.",
+    is_flag=True,
+    default=False,
+    show_default=True,
+)
+def main(transport, host, port, debug):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    if transport == Transport.STDIO.value:
+        # stdout is a pipe in stdio mode — prevent rich from using the Win32 console API
+        os.environ.setdefault("NO_COLOR", "1")
+    if debug:
+        enable_debug()
+        logging.getLogger().setLevel(logging.DEBUG)
+        # Also set for uvicorn loggers if they exist
+        for name in ["uvicorn", "uvicorn.error", "uvicorn.access", "fastmcp"]:
+            logging.getLogger(name).setLevel(logging.DEBUG)
 
-def main(transport, host, port):
-    config = Config(
-        mode=os.getenv("MODE", Mode.LOCAL.value).lower(),
-        sandbox_id=os.getenv("SANDBOX_ID", ''),
-        api_key=os.getenv("API_KEY", '')
-    )
-    match config.mode:
-        case Mode.LOCAL.value:
-            _run_local_mode(transport=transport, host=host, port=port)
-        case Mode.REMOTE.value:
-            _run_remote_mode(config=config, transport=transport, host=host, port=port)
-        case _:
-            raise ValueError(f"Invalid mode: {config.mode}")
+    logger.debug("Starting windows-mcp (transport=%s)", transport)
+    try:
+        _run_server(transport=transport, host=host, port=port)
+        logger.debug("Server shut down normally")
+    except Exception:
+        logger.error("Server exiting due to unhandled exception", exc_info=True)
+        raise
+
 
 if __name__ == "__main__":
     main()

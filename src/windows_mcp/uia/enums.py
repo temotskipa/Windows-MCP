@@ -573,7 +573,7 @@ PropertyIdNames = {
 }
 
 
-class AccessibleRole:
+class AccessibleRole(IntEnum):
     """
     AccessibleRole from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/dotnet/api/system.windows.forms.accessiblerole?view=netframework-4.8
@@ -648,7 +648,7 @@ class AccessibleRole:
 AccessibleRoleNames = {v: k for k, v in AccessibleRole.__dict__.items() if not k.startswith("_")}
 
 
-class AccessibleState:
+class AccessibleState(IntFlag):
     """
     AccessibleState from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/dotnet/api/system.windows.forms.accessiblestates?view=netframework-4.8
@@ -704,7 +704,7 @@ class AccessibleSelection:
     RemoveSelection = 0x10
 
 
-class AnnotationType:
+class AnnotationType(IntEnum):
     """
     AnnotationType from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/winauto/uiauto-annotation-type-identifiers
@@ -736,7 +736,7 @@ class AnnotationType:
     UnsyncedChange = 60015
 
 
-class NavigateDirection:
+class NavigateDirection(IntEnum):
     """
     NavigateDirection from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-navigatedirection
@@ -749,7 +749,7 @@ class NavigateDirection:
     LastChild = 4
 
 
-class DockPosition:
+class DockPosition(IntEnum):
     """
     DockPosition from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-dockposition
@@ -763,7 +763,7 @@ class DockPosition:
     None_ = 5
 
 
-class ScrollAmount:
+class ScrollAmount(IntEnum):
     """
     ScrollAmount from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-scrollamount
@@ -776,7 +776,7 @@ class ScrollAmount:
     SmallIncrement = 4
 
 
-class StyleId:
+class StyleId(IntEnum):
     """
     StyleId from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/winauto/uiauto-style-identifiers
@@ -801,7 +801,7 @@ class StyleId:
     NumberedList = 70016
 
 
-class RowOrColumnMajor:
+class RowOrColumnMajor(IntEnum):
     """
     RowOrColumnMajor from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-roworcolumnmajor
@@ -812,7 +812,7 @@ class RowOrColumnMajor:
     Indeterminate = 2
 
 
-class ExpandCollapseState:
+class ExpandCollapseState(IntEnum):
     """
     ExpandCollapseState from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-expandcollapsestate
@@ -824,7 +824,7 @@ class ExpandCollapseState:
     LeafNode = 3
 
 
-class OrientationType:
+class OrientationType(IntEnum):
     """
     OrientationType from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-orientationtype
@@ -835,7 +835,7 @@ class OrientationType:
     Vertical = 2
 
 
-class ToggleState:
+class ToggleState(IntEnum):
     """
     ToggleState from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-togglestate
@@ -846,7 +846,7 @@ class ToggleState:
     Indeterminate = 2
 
 
-class TextPatternRangeEndpoint:
+class TextPatternRangeEndpoint(IntEnum):
     """
     TextPatternRangeEndpoint from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-textpatternrangeendpoint
@@ -908,7 +908,7 @@ class TextAttributeId:
     UnderlineStyleAttribute = 40030
 
 
-class TextUnit:
+class TextUnit(IntEnum):
     """
     TextUnit from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-textunit
@@ -923,7 +923,7 @@ class TextUnit:
     Document = 6
 
 
-class ZoomUnit:
+class ZoomUnit(IntEnum):
     """
     ZoomUnit from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-zoomunit
@@ -936,7 +936,7 @@ class ZoomUnit:
     SmallIncrement = 4
 
 
-class WindowInteractionState:
+class WindowInteractionState(IntEnum):
     """
     WindowInteractionState from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-windowinteractionstate
@@ -949,7 +949,7 @@ class WindowInteractionState:
     NotResponding = 4
 
 
-class WindowVisualState:
+class WindowVisualState(IntEnum):
     """
     WindowVisualState from IUIAutomation.
     Refer https://docs.microsoft.com/en-us/windows/win32/api/uiautomationcore/ne-uiautomationcore-windowvisualstate
@@ -960,7 +960,7 @@ class WindowVisualState:
     Minimized = 2
 
 
-class ConsoleColor:
+class ConsoleColor(IntEnum):
     """ConsoleColor from Win32."""
 
     Default = -1
@@ -982,7 +982,7 @@ class ConsoleColor:
     White = 15
 
 
-class GAFlag:
+class GAFlag(IntEnum):
     """GAFlag from Win32."""
 
     Parent = 1
@@ -990,7 +990,7 @@ class GAFlag:
     RootOwner = 3
 
 
-class MouseEventFlag:
+class MouseEventFlag(IntFlag):
     """MouseEventFlag from Win32."""
 
     Move = 0x0001
@@ -1009,7 +1009,7 @@ class MouseEventFlag:
     Absolute = 0x8000
 
 
-class KeyboardEventFlag:
+class KeyboardEventFlag(IntEnum):
     """KeyboardEventFlag from Win32."""
 
     KeyDown = 0x0000
@@ -1019,7 +1019,7 @@ class KeyboardEventFlag:
     KeyScanCode = 0x0008
 
 
-class InputType:
+class InputType(IntEnum):
     """InputType from Win32"""
 
     Mouse = 0
@@ -1027,7 +1027,7 @@ class InputType:
     Hardware = 2
 
 
-class ModifierKey:
+class ModifierKey(IntFlag):
     """ModifierKey from Win32."""
 
     Alt = 0x0001
@@ -1037,7 +1037,7 @@ class ModifierKey:
     NoRepeat = 0x4000
 
 
-class SW:
+class SW(IntEnum):
     """ShowWindow params from Win32."""
 
     Hide = 0
@@ -1057,7 +1057,7 @@ class SW:
     Max = 11
 
 
-class SWP:
+class SWP(IntFlag):
     """SetWindowPos params from Win32."""
 
     HWND_Top = 0
@@ -1081,7 +1081,7 @@ class SWP:
     SWP_AsyncWindowPos = 0x4000
 
 
-class MB:
+class MB(IntFlag):
     """MessageBox flags from Win32."""
 
     Ok = 0x00000000
@@ -1137,7 +1137,7 @@ class MB:
     IdTimeout = 32000
 
 
-class GWL:
+class GWL(IntEnum):
     ExStyle = -20
     HInstance = -6
     HwndParent = -8
@@ -1147,13 +1147,13 @@ class GWL:
     WndProc = -4
 
 
-class ProcessDpiAwareness:
+class ProcessDpiAwareness(IntEnum):
     DpiUnaware = 0
     SystemDpiAware = 1
     PerMonitorDpiAware = 2
 
 
-class DpiAwarenessContext:
+class DpiAwarenessContext(IntEnum):
     Unaware = -1
     SystemAware = -2
     PerMonitorAware = -3
@@ -1161,7 +1161,7 @@ class DpiAwarenessContext:
     UnawareGdiScaled = -5
 
 
-class Keys:
+class Keys(IntFlag):
     """Key codes from Win32."""
 
     VK_LBUTTON = 0x01  # Left mouse button
@@ -1701,7 +1701,7 @@ class Rect:
         )
 
 
-class ClipboardFormat:
+class ClipboardFormat(IntEnum):
     CF_TEXT = 1
     CF_BITMAP = 2
     CF_METAFILEPICT = 3
@@ -2043,3 +2043,78 @@ class VisualEffects(IntEnum):
     VisualEffects_Glow = 3
     VisualEffects_SoftEdges = 4
     VisualEffects_Bevel = 5
+
+
+class UIAError(IntEnum):
+    """UI Automation and COM error codes.
+
+    Source: Winerror.h, UIAutomationCoreApi.h, WinError.h.
+    Categories:
+      UIA_E_*     — UI Automation–specific errors
+      RO_E_*      — Windows Runtime object lifecycle errors
+      RPC_E_*     — COM RPC transport/threading errors
+      CO_E_*      — COM object state errors
+      E_*         — General COM errors
+    """
+
+    UIA_E_ELEMENTNOTENABLED = -2147220992  # 0x80040200 — method called on disabled element
+    UIA_E_ELEMENTNOTAVAILABLE = -2147220991  # 0x80040201 — element destroyed or virtualized
+    UIA_E_NOCLICKABLEPOINT = -2147220990  # 0x80040202 — element has no clickable point
+    UIA_E_PROXYASSEMBLYNOTLOADED = -2147220989  # 0x80040203 — client-side proxy provider failed to load
+    UIA_E_NOTSUPPORTED = -2147220988  # 0x80040204 — property/pattern not supported by provider
+    UIA_E_INVALIDOPERATION = -2146233079  # 0x80131509 — operation not valid in current state
+    UIA_E_TIMEOUT = -2146233083  # 0x80131505 — UIA operation timed out
+
+    EVENT_E_ALL_SUBSCRIBERS_FAILED = -2147220991  # 0x80040201 — same as UIA_E_ELEMENTNOTAVAILABLE
+
+    RO_E_CLOSED = -2147483629  # 0x80000013 — object has been closed/disposed
+
+    RPC_E_CALL_REJECTED = -2147418111  # 0x80010001 — callee rejected the call (app busy, may retry)
+    RPC_E_CALL_CANCELED = -2147418110  # 0x80010002 — call canceled by message filter
+    RPC_E_CONNECTION_TERMINATED = -2147418106  # 0x80010006 — connection terminated or in bogus state
+    RPC_E_SERVER_DIED = -2147418105  # 0x80010007 — server gone, call may have executed
+    RPC_E_SERVER_DIED_DNE = -2147418094  # 0x80010012 — server gone, call did NOT execute
+    RPC_E_SYS_CALL_FAILED = -2147417854  # 0x80010100 — underlying system call failed
+    RPC_E_OUT_OF_RESOURCES = -2147417855  # 0x80010101 — could not allocate required resource
+    RPC_E_ATTEMPTED_MULTITHREAD = -2147417854  # 0x80010102 — multiple threads in STA mode
+    RPC_E_SERVERFAULT = -2147417851  # 0x80010105 — server threw an exception
+    RPC_E_CHANGED_MODE = -2147417850  # 0x80010106 — STA/MTA mode conflict on thread
+    RPC_E_DISCONNECTED = -2147418360  # 0x80010108 — object invoked has disconnected from clients
+    RPC_E_SERVERCALL_RETRYLATER = -2147417846  # 0x8001010A — app busy, retry later
+    RPC_E_SERVERCALL_REJECTED = -2147417845  # 0x8001010B — message filter rejected the call
+    RPC_E_WRONG_THREAD = -2147417842  # 0x8001010E — interface marshalled for a different thread
+    RPC_E_THREAD_NOT_INIT = -2147417841  # 0x8001010F — CoInitialize not called on current thread
+    RPC_E_TIMEOUT = -2147417825  # 0x8001011F — RPC-level operation timed out
+    RPC_E_UNEXPECTED = -2147352577  # 0x8001FFFF — internal RPC error
+    RPC_E_ACCESS_DENIED = -2147417829  # 0x8001011B — RPC-level access denied
+
+    CO_E_OBJNOTCONNECTED = -2147220995  # 0x800401FD — object not connected to server
+    CO_E_RELEASED = -2147220993  # 0x800401FF — object has been released
+    CO_E_NOTINITIALIZED = -2147220496  # 0x800401F0 — CoInitialize not called
+
+    E_ACCESSDENIED = -2147024891  # 0x80070005 — access denied
+
+
+def is_dead_element_error(code: int) -> bool:
+    """Check if error code indicates element or window no longer exists."""
+    dead_codes = {
+        UIAError.UIA_E_ELEMENTNOTAVAILABLE,
+        UIAError.RO_E_CLOSED,
+        UIAError.RPC_E_DISCONNECTED,
+        UIAError.RPC_E_SERVER_DIED,
+        UIAError.RPC_E_SERVER_DIED_DNE,
+        UIAError.RPC_E_CONNECTION_TERMINATED,
+        UIAError.CO_E_OBJNOTCONNECTED,
+        UIAError.CO_E_RELEASED,
+    }
+    return code in dead_codes
+
+
+def is_retryable_error(code: int) -> bool:
+    """Check if error code indicates app is busy but alive — may succeed on retry."""
+    retryable_codes = {
+        UIAError.RPC_E_CALL_REJECTED,
+        UIAError.RPC_E_SERVERCALL_RETRYLATER,
+        UIAError.RPC_E_SERVERCALL_REJECTED,
+    }
+    return code in retryable_codes
