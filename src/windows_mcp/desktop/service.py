@@ -1420,67 +1420,6 @@ class Desktop:
             return f'No process matching "{name}" found or access denied.'
         return f"{'Force killed' if force else 'Terminated'}: {', '.join(killed)}"
 
-
-
-
-
-    def registry_get(self, path: str, name: str) -> str:
-        q_path = ps_quote(path)
-        q_name = ps_quote(name)
-        command = f"Get-ItemProperty -Path {q_path} -Name {q_name} | Select-Object -ExpandProperty {q_name}"
-        response, status = PowerShellExecutor.execute_command(command)
-        if status != 0:
-            return f'Error reading registry: {response.strip()}'
-        return f'Registry value [{path}] "{name}" = {response.strip()}'
-
-    def registry_set(self, path: str, name: str, value: str, reg_type: str = 'String') -> str:
-        q_path = ps_quote(path)
-        q_name = ps_quote(name)
-        q_value = ps_quote(value)
-        allowed_types = {"String", "ExpandString", "Binary", "DWord", "MultiString", "QWord"}
-        if reg_type not in allowed_types:
-            return f"Error: invalid registry type '{reg_type}'. Allowed: {', '.join(sorted(allowed_types))}"
-        command = (
-            f"if (-not (Test-Path {q_path})) {{ New-Item -Path {q_path} -Force | Out-Null }}; "
-            f"Set-ItemProperty -Path {q_path} -Name {q_name} -Value {q_value} -Type {reg_type} -Force"
-        )
-        response, status = PowerShellExecutor.execute_command(command)
-        if status != 0:
-            return f'Error writing registry: {response.strip()}'
-        return f'Registry value [{path}] "{name}" set to "{value}" (type: {reg_type}).'
-
-    def registry_delete(self, path: str, name: str | None = None) -> str:
-        q_path = ps_quote(path)
-        if name:
-            q_name = ps_quote(name)
-            command = f"Remove-ItemProperty -Path {q_path} -Name {q_name} -Force"
-            response, status = PowerShellExecutor.execute_command(command)
-            if status != 0:
-                return f'Error deleting registry value: {response.strip()}'
-            return f'Registry value [{path}] "{name}" deleted.'
-        else:
-            command = f"Remove-Item -Path {q_path} -Recurse -Force"
-            response, status = PowerShellExecutor.execute_command(command)
-            if status != 0:
-                return f'Error deleting registry key: {response.strip()}'
-            return f'Registry key [{path}] deleted.'
-
-    def registry_list(self, path: str) -> str:
-        q_path = ps_quote(path)
-        command = (
-            f"$values = (Get-ItemProperty -Path {q_path} -ErrorAction Stop | "
-            f"Select-Object * -ExcludeProperty PS* | Format-List | Out-String).Trim(); "
-            f"$subkeys = (Get-ChildItem -Path {q_path} -ErrorAction SilentlyContinue | "
-            f"Select-Object -ExpandProperty PSChildName) -join \"`n\"; "
-            f"if ($values) {{ Write-Output \"Values:`n$values\" }}; "
-            f"if ($subkeys) {{ Write-Output \"`nSub-Keys:`n$subkeys\" }}; "
-            f"if (-not $values -and -not $subkeys) {{ Write-Output 'No values or sub-keys found.' }}"
-        )
-        response, status = PowerShellExecutor.execute_command(command)
-        if status != 0:
-            return f'Error listing registry: {response.strip()}'
-        return f'Registry key [{path}]:\n{response.strip()}'
-
     @contextmanager
     def auto_minimize(self):
         try:
