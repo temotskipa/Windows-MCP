@@ -4,6 +4,8 @@ from typing import Literal
 
 from mcp.types import ToolAnnotations
 from windows_mcp.analytics import with_analytics
+from windows_mcp import registry
+from windows_mcp.registry import RegistryType
 from fastmcp import Context
 
 
@@ -25,25 +27,24 @@ def register(mcp, *, get_desktop, get_analytics):
         path: str,
         name: str | None = None,
         value: str | None = None,
-        type: Literal['String', 'DWord', 'QWord', 'Binary', 'MultiString', 'ExpandString'] = 'String',
+        type: RegistryType = 'String',
         ctx: Context = None,
     ) -> str:
-        desktop = get_desktop()
         try:
             if mode == 'get':
                 if name is None:
                     return 'Error: name parameter is required for get mode.'
-                return desktop.registry_get(path=path, name=name)
+                return registry.get_value(path=path, name=name)
             elif mode == 'set':
                 if name is None:
                     return 'Error: name parameter is required for set mode.'
                 if value is None:
                     return 'Error: value parameter is required for set mode.'
-                return desktop.registry_set(path=path, name=name, value=value, reg_type=type)
+                return registry.set_value(path=path, name=name, value=value, reg_type=type)
             elif mode == 'delete':
-                return desktop.registry_delete(path=path, name=name)
+                return registry.delete_entry(path=path, name=name)
             elif mode == 'list':
-                return desktop.registry_list(path=path)
+                return registry.list_key(path=path)
             else:
                 return 'Error: mode must be "get", "set", "delete", or "list".'
         except Exception as e:
