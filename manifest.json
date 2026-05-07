@@ -25,6 +25,7 @@
         "--directory",
         "${__dirname}",
         "run",
+        "--no-sync",
         "windows-mcp"
       ],
       "env": {
