@@ -28,6 +28,7 @@
         "windows-mcp"
       ],
       "env": {
+        "UV_NO_SYNC": "1",
         "ANONYMIZED_TELEMETRY": "${user_config.anonymized_telemetry}",
         "WINDOWS_MCP_PROFILE_SNAPSHOT": "${user_config.profile_snapshot}",
         "WINDOWS_MCP_SCREENSHOT_BACKEND": "${user_config.screenshot_backend}",
