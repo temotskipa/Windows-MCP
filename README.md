@@ -26,7 +26,6 @@
 mcp-name: io.github.CursorTouch/Windows-MCP
 
 ## Updates
-- Added VM support for Windows-MCP. Check (windowsmcp.io)[https://windowsmcp.io/] for more details.
 - Windows-MCP reached `2M+ Users` in [Claude Desktop Extensiosn](https://claude.ai/directory). 
 - Try out [🪟Windows-Use](https://pypi.org/project/windows-use/), an agent built using Windows-MCP.
 - Windows-MCP is now available on [PyPI](https://pypi.org/project/windows-mcp/) (thus supports `uvx windows-mcp`)
@@ -63,7 +62,7 @@ mcp-name: io.github.CursorTouch/Windows-MCP
   Easily adapt or extend tools to suit your unique automation or AI integration needs.
 
 - **Real-Time Interaction**  
-  Typical latency between actions (e.g., from one mouse click to the next) ranges from **0.2 to 0.9 secs**, and may slightly vary based on the number of active applications and system load, also the inferencing speed of the llm.
+  Typical latency between actions (e.g., from one mouse click to the next) ranges from **0.2 to 0.5 secs**, and may slightly vary based on the number of active applications and system load, also the inferencing speed of the llm.
 
 - **DOM Mode for Browser Automation**  
   Special `use_dom=True` mode for State-Tool that focuses exclusively on web page content, filtering out browser UI elements for cleaner, more efficient web automation.
@@ -505,33 +504,6 @@ MCP Client can access the following tools to interact with Windows:
 - `Notification`: Send a Windows toast notification with a title and message.
 - `Registry`: Read, write, delete, or list Windows Registry values and keys.
 
-### Performance Notes
-
-`MultiSelect` and `MultiEdit` now resolve label-based coordinates in bulk through `Desktop.get_coordinates_from_labels`, which avoids repeated lookups against the desktop tree state.
-
-PR benchmark (mock-based):
-
-- Iterative: `0.003578s`
-- Bulk: `0.002238s`
-- Improvement: `~37.45%`
-
-In a local Windows benchmark with a synthetic tree state and 35,000 label resolutions per run, the measured results were:
-
-- Iterative: `0.005895s`
-- Bulk: `0.002825s`
-- Improvement: `52.09%`
-
-In a local desktop runtime check (live Windows state capture path), the measured averages were:
-
-- FindElement-like (`use_vision=False`, `use_annotation=False`): `0.5507s`
-- Snapshot-like (`use_vision=True`, `use_annotation=True`): `0.6717s`
-- Relative gain for lighter lookup path: `~18.01%`
-
-You can reproduce the comparison with:
-
-```shell
-python scripts/benchmark_multi_coordinates.py
-```
 
 ## 🤝 Connect with Us
 Stay updated and join our community:
@@ -607,8 +579,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 Windows-MCP makes use of several excellent open-source projects that power its Windows automation features:
 
 - [UIAutomation](https://github.com/yinkaisheng/Python-UIAutomation-for-Windows)
-
-- [PyAutoGUI](https://github.com/asweigart/pyautogui)
 
 Huge thanks to the maintainers and contributors of these libraries for their outstanding work and open-source spirit.
 
