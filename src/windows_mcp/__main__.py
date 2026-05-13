@@ -792,14 +792,13 @@ def service_install():
     _require_win32()
     import win32serviceutil
     import win32service
-    import win32api
     from windows_mcp.service.host import WindowsMCPHostService
 
-    # Resolve the Python executable that hosts this package so the service
-    # knows how to start itself.
-    python_exe = shutil.which("python") or shutil.which("python3") or "python"
-    host_module = "windows_mcp.service.host"
-
+    # Do NOT pass exeName here.  pywin32 ships PythonService.exe specifically
+    # to act as the SCM-visible executable; it handles CoInitialize, the
+    # SetServiceStatus handshake, and then loads our Python class.  Pointing
+    # the SCM at python.exe directly causes error 1053 because python.exe
+    # never calls SetServiceStatus(SERVICE_RUNNING).
     try:
         win32serviceutil.InstallService(
             pythonClassString=f"{WindowsMCPHostService.__module__}.{WindowsMCPHostService.__name__}",
@@ -807,7 +806,7 @@ def service_install():
             displayName=_SERVICE_DISPLAY,
             description=WindowsMCPHostService._svc_description_,
             startType=win32service.SERVICE_AUTO_START,
-            exeName=python_exe,
+            startAccountName="LocalSystem",  # must be SYSTEM to reach Winlogon desktop
         )
         click.echo(f"Service '{_SERVICE_NAME}' installed.")
     except Exception as exc:
