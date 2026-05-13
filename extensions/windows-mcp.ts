@@ -61,30 +61,45 @@ const point = Type.Array(Type.Number(), {
 export default function (pi: ExtensionAPI) {
   let client: Client | undefined;
   let connecting: Promise<Client> | undefined;
+  let pendingClient: Client | undefined;
+  let shuttingDown = false;
 
   async function getClient(): Promise<Client> {
     if (process.platform !== "win32") {
       throw new Error("Windows-MCP can only control a Windows desktop. Run this Pi extension on Windows.");
     }
+    if (shuttingDown) {
+      throw new Error("Windows-MCP Pi extension is shutting down.");
+    }
     if (client) return client;
     if (!connecting) {
-      connecting = (async () => {
+      let connection!: Promise<Client>;
+      connection = (async () => {
         const transport = new StdioClientTransport({
           command: "uv",
           args: ["run", "windows-mcp"],
           cwd: findProjectRoot(),
         });
         const next = new Client({ name: "pi-windows-mcp", version: "0.1.0" });
+        pendingClient = next;
         try {
           await next.connect(transport);
+          if (shuttingDown) {
+            await next.close();
+            throw new Error("Windows-MCP Pi extension shut down during connection.");
+          }
           client = next;
           return next;
         } catch (error) {
-          connecting = undefined;
+          if (client === next) client = undefined;
           try { await next.close(); } catch {}
           throw error;
+        } finally {
+          if (pendingClient === next) pendingClient = undefined;
+          if (connecting === connection) connecting = undefined;
         }
       })();
+      connecting = connection;
     }
     return connecting;
   }
@@ -96,9 +111,26 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("session_shutdown", async () => {
-    try { await client?.close(); } catch {}
+    shuttingDown = true;
+    const activeClient = client;
+    const inFlightConnection = connecting;
+    const inFlightClient = pendingClient;
     client = undefined;
     connecting = undefined;
+    pendingClient = undefined;
+
+    try { await activeClient?.close(); } catch {}
+    if (inFlightClient && inFlightClient !== activeClient) {
+      try { await inFlightClient.close(); } catch {}
+    }
+    if (inFlightConnection) {
+      try {
+        const connectedClient = await inFlightConnection;
+        if (connectedClient !== activeClient && connectedClient !== inFlightClient) {
+          await connectedClient.close();
+        }
+      } catch {}
+    }
   });
 
   pi.registerTool({
