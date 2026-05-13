@@ -77,6 +77,18 @@ class HostServiceClient:
         """Return top-level window titles visible on the input desktop."""
         return self._call("uia_windows", {})
 
+    def uia_tree(self) -> list[dict]:
+        """Return the full UIA tree of the input desktop as a list of window dicts."""
+        return self._call("uia_tree", {})
+
+    def uia_invoke(self, name: str) -> bool:
+        """Find and invoke a named element (e.g. 'Yes', 'No') on the input desktop."""
+        return self._call("uia_invoke", {"name": name})
+
+    def uia_click_at(self, x: int, y: int) -> bool:
+        """Invoke the element at screen coordinates (x, y) on the input desktop."""
+        return self._call("uia_click_at", {"x": x, "y": y})
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------

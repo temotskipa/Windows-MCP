@@ -111,6 +111,18 @@ def _dispatch(req: Request) -> Response:
                 titles = secure_desktop.uia_get_window_titles()
                 return Response(id=req.id, result=titles)
 
+            case "uia_tree":
+                tree = secure_desktop.uia_get_tree()
+                return Response(id=req.id, result=tree)
+
+            case "uia_invoke":
+                ok = secure_desktop.uia_invoke_element(req.params["name"])
+                return Response(id=req.id, result=ok)
+
+            case "uia_click_at":
+                ok = secure_desktop.uia_click_at(req.params["x"], req.params["y"])
+                return Response(id=req.id, result=ok)
+
             case _:
                 return Response(id=req.id, error=f"Unknown method: {req.method!r}")
 
