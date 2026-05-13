@@ -1,18 +1,35 @@
 from contextlib import asynccontextmanager
-from windows_mcp.config import is_debug, enable_debug
-from windows_mcp.infrastructure import AuthKeyMiddleware, is_loopback_host, IPAllowlistMiddleware, parse_ip_allowlist
-from windows_mcp.tiers import filter_tools, get_tier_labels, parse_tool_csv, resolve_enabled_tools
+from windows_mcp.config import enable_debug
+from windows_mcp.infrastructure import (
+    AuthKeyMiddleware,
+    OAuthOnlyMiddleware,
+    is_loopback_host,
+    IPAllowlistMiddleware,
+    parse_ip_allowlist,
+    CONFIG_DIR,
+    CONFIG_FILE,
+    WindowsMCPConfig,
+    discover_config_path,
+    load_config,
+    write_config,
+    OAuthStore,
+    build_oauth_routes,
+    validate_oauth_token,
+)
+from click.core import ParameterSource
 from fastmcp import FastMCP
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
-from dataclasses import dataclass, field
 from textwrap import dedent
 from enum import Enum
 from typing import Any
 import logging
 import asyncio
+import secrets
+import subprocess
 import click
 import os
+import shutil
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +53,11 @@ def _get_analytics():
     return analytics
 
 
-def _http_middleware(auth_key: str | None = None, ip_allowlist: list | None = None) -> list:
+def _http_middleware(
+    auth_key: str | None = None,
+    ip_allowlist: list | None = None,
+    oauth_validator=None,
+) -> list:
     """Return ASGI middleware for HTTP transports including CORS and OPTIONS handling."""
     middleware = [
         Middleware(OptionsMiddleware),
@@ -45,8 +66,23 @@ def _http_middleware(auth_key: str | None = None, ip_allowlist: list | None = No
     if ip_allowlist:
         middleware.append(Middleware(IPAllowlistMiddleware, allowlist=ip_allowlist))
     if auth_key:
-        middleware.append(Middleware(AuthKeyMiddleware, auth_key=auth_key))
+        middleware.append(Middleware(AuthKeyMiddleware, auth_key=auth_key, oauth_validator=oauth_validator))
+    elif oauth_validator:
+        middleware.append(Middleware(OAuthOnlyMiddleware, oauth_validator=oauth_validator))
     return middleware
+
+
+def _param_explicit(ctx: click.Context, name: str) -> bool:
+    src = ctx.get_parameter_source(name)
+    return src in {ParameterSource.COMMANDLINE, ParameterSource.ENVIRONMENT}
+
+
+def _choose_value(ctx: click.Context, name: str, cli_value, config_value, default_value):
+    if _param_explicit(ctx, name):
+        return cli_value
+    if config_value is not None:
+        return config_value
+    return default_value
 
 
 class OptionsMiddleware:
@@ -143,24 +179,54 @@ class Transport(Enum):
         return self.value
 
 
+def _apply_tool_filter(mcp, explicit_tools: list[str] | None, exclude_tools: list[str] | None) -> None:
+    """Remove disabled tools from the MCP registry."""
+    tool_mgr = getattr(mcp, "_tool_manager", None)
+    tools_dict = getattr(tool_mgr, "_tools", None)
+    if tools_dict is None:
+        provider = getattr(mcp, "_local_provider", None)
+        components = getattr(provider, "_components", {})
+        tools_dict = {
+            (getattr(v, "name", None) or k.split(":", 1)[1].split("@", 1)[0]): k
+            for k, v in components.items()
+            if isinstance(k, str) and k.startswith("tool:")
+        }
+        def _remove(name):
+            keys = [k for k, v in components.items() if isinstance(k, str) and k.startswith("tool:") and (getattr(components[k], "name", None) == name or k.split(":", 1)[1].split("@", 1)[0] == name)]
+            for k in keys:
+                components.pop(k, None)
+        registered = set(tools_dict.keys())
+    else:
+        def _remove(name):
+            tools_dict.pop(name, None)
+        registered = set(tools_dict.keys())
+
+    if explicit_tools:
+        keep = {t for t in explicit_tools if t in registered}
+        for name in registered - keep:
+            _remove(name)
+    elif exclude_tools:
+        for name in exclude_tools:
+            if name in registered:
+                _remove(name)
+    logger.debug("Tool filter applied: explicit=%s exclude=%s", explicit_tools, exclude_tools)
+
+
 def _run_server(
     transport: str,
     host: str,
     port: int,
     auth_key: str | None = None,
     ip_allowlist: list | None = None,
-    enabled_tools: set | None = None,
+    explicit_tools: list[str] | None = None,
+    exclude_tools: list[str] | None = None,
     ssl_certfile: str | None = None,
     ssl_keyfile: str | None = None,
+    oauth_validator=None,
 ) -> None:
     mcp = _build_mcp()
-    if enabled_tools is not None:
-        counts = filter_tools(mcp, enabled_tools)
-        tiers = get_tier_labels(enabled_tools)
-        logger.debug(
-            "Tool filter applied: %d/%d enabled (tiers: %s)",
-            counts["enabled"], counts["total"], ",".join(tiers) or "none",
-        )
+    if explicit_tools or exclude_tools:
+        _apply_tool_filter(mcp, explicit_tools, exclude_tools)
     match transport:
         case Transport.STDIO.value:
             mcp.run(transport=Transport.STDIO.value, show_banner=False)
@@ -174,14 +240,24 @@ def _run_server(
                 host=host,
                 port=port,
                 show_banner=False,
-                middleware=_http_middleware(auth_key=auth_key, ip_allowlist=ip_allowlist),
+                middleware=_http_middleware(
+                    auth_key=auth_key,
+                    ip_allowlist=ip_allowlist,
+                    oauth_validator=oauth_validator,
+                ),
                 uvicorn_config=uvicorn_config or None,
             )
         case _:
             raise ValueError(f"Invalid transport: {transport}")
 
 
-@click.command()
+@click.group()
+def main():
+    """Windows-MCP: MCP server for Windows desktop automation."""
+
+
+@main.command()
+@click.pass_context
 @click.option(
     "--transport",
     help="The transport layer used by the MCP server.",
@@ -212,6 +288,13 @@ def _run_server(
     show_default=True,
 )
 @click.option(
+    "--config",
+    help="Path to windows-mcp config file (default: ~/.windows-mcp/config.toml).",
+    default=None,
+    type=click.Path(dir_okay=False),
+    show_default=False,
+)
+@click.option(
     "--auth-key",
     help="Bearer token required on all HTTP requests. Can also be set via WINDOWS_MCP_AUTH_KEY.",
     default=None,
@@ -235,20 +318,8 @@ def _run_server(
     show_default=False,
 )
 @click.option(
-    "--enable-tier3",
-    help="Enable Tier 3 high-risk tools: App, PowerShell, FileSystem, Registry, Process.",
-    is_flag=True,
-    default=False,
-)
-@click.option(
-    "--disable-tier2",
-    help="Disable Tier 2 interactive tools, leaving only read-only Tier 1 tools active.",
-    is_flag=True,
-    default=False,
-)
-@click.option(
     "--tools",
-    help="Comma-separated explicit list of tools to enable, overrides tier settings (e.g. 'Screenshot,Click,Snapshot').",
+    help="Comma-separated explicit list of tools to enable (e.g. 'Screenshot,Click,Snapshot'). Overrides --exclude-tools.",
     default=None,
     envvar="WINDOWS_MCP_TOOLS",
     type=str,
@@ -267,7 +338,7 @@ def _run_server(
     help="Path to TLS certificate file (.pem) for HTTPS. Requires --ssl-keyfile.",
     default=None,
     envvar="WINDOWS_MCP_SSL_CERTFILE",
-    type=click.Path(exists=True, dir_okay=False),
+    type=str,
     show_default=False,
 )
 @click.option(
@@ -275,61 +346,118 @@ def _run_server(
     help="Path to TLS private key file (.pem) for HTTPS. Requires --ssl-certfile.",
     default=None,
     envvar="WINDOWS_MCP_SSL_KEYFILE",
-    type=click.Path(exists=True, dir_okay=False),
+    type=str,
     show_default=False,
 )
-def main(transport, host, port, debug, auth_key, allow_insecure_remote, ip_allowlist, enable_tier3, disable_tier2, tools, exclude_tools, ssl_certfile, ssl_keyfile):
+@click.option(
+    "--oauth-client-id",
+    help="OAuth client ID (pre-provisioned confidential client). Requires --oauth-client-secret.",
+    default=None,
+    envvar="WINDOWS_MCP_OAUTH_CLIENT_ID",
+    type=str,
+    show_default=False,
+)
+@click.option(
+    "--oauth-client-secret",
+    help="OAuth client secret. Requires --oauth-client-id.",
+    default=None,
+    envvar="WINDOWS_MCP_OAUTH_CLIENT_SECRET",
+    type=str,
+    show_default=False,
+)
+def serve(ctx, transport, host, port, debug, config, auth_key, allow_insecure_remote, ip_allowlist, tools, exclude_tools, ssl_certfile, ssl_keyfile, oauth_client_id, oauth_client_secret):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     if transport == Transport.STDIO.value:
-        # stdout is a pipe in stdio mode — prevent rich from using the Win32 console API
         os.environ.setdefault("NO_COLOR", "1")
     if debug:
         enable_debug()
         logging.getLogger().setLevel(logging.DEBUG)
-        # Also set for uvicorn loggers if they exist
         for name in ["uvicorn", "uvicorn.error", "uvicorn.access", "fastmcp"]:
             logging.getLogger(name).setLevel(logging.DEBUG)
 
-    parsed_allowlist = None
-    if ip_allowlist:
-        try:
-            parsed_allowlist = parse_ip_allowlist([e.strip() for e in ip_allowlist.split(",")])
-        except ValueError as exc:
-            raise click.ClickException(f"Invalid --ip-allowlist: {exc}")
-
+    # Load config file and merge with CLI flags (CLI wins)
+    config_path = discover_config_path(config)
     try:
-        enabled_tools = resolve_enabled_tools(
-            enable_tier3=enable_tier3,
-            disable_tier2=disable_tier2,
-            explicit_tools=parse_tool_csv(tools),
-            exclude_tools=parse_tool_csv(exclude_tools),
-        )
-    except ValueError as exc:
+        cfg = load_config(config_path)
+    except (FileNotFoundError, ValueError) as exc:
         raise click.ClickException(str(exc))
+
+    transport = _choose_value(ctx, "transport", transport, cfg.server.transport, "stdio")
+    host = _choose_value(ctx, "host", host, cfg.server.host, "localhost")
+    port = int(_choose_value(ctx, "port", port, cfg.server.port, 8000))
+    auth_key = _choose_value(ctx, "auth_key", auth_key, cfg.server.auth_key, None)
+    allow_insecure_remote = bool(
+        _choose_value(ctx, "allow_insecure_remote", allow_insecure_remote, cfg.server.allow_insecure_remote, False)
+    )
+    ssl_certfile = _choose_value(ctx, "ssl_certfile", ssl_certfile, cfg.server.ssl_certfile, None)
+    ssl_keyfile = _choose_value(ctx, "ssl_keyfile", ssl_keyfile, cfg.server.ssl_keyfile, None)
+    oauth_client_id = _choose_value(ctx, "oauth_client_id", oauth_client_id, cfg.security.oauth_client_id, None)
+    oauth_client_secret = _choose_value(
+        ctx, "oauth_client_secret", oauth_client_secret, cfg.security.oauth_client_secret, None
+    )
+
+    cli_tools = [t.strip() for t in tools.split(",") if t.strip()] if tools else []
+    cli_exclude = [t.strip() for t in exclude_tools.split(",") if t.strip()] if _param_explicit(ctx, "exclude_tools") and exclude_tools else list(cfg.tools.exclude)
+    cli_allowlist = [e.strip() for e in ip_allowlist.split(",")] if ip_allowlist and _param_explicit(ctx, "ip_allowlist") else cfg.security.ip_allowlist
 
     if bool(ssl_certfile) != bool(ssl_keyfile):
         raise click.ClickException("--ssl-certfile and --ssl-keyfile must be provided together.")
 
-    if transport != Transport.STDIO.value and not is_loopback_host(host) and not auth_key and not allow_insecure_remote:
+    if bool(oauth_client_id) != bool(oauth_client_secret):
+        raise click.ClickException("OAuth requires both --oauth-client-id and --oauth-client-secret.")
+
+    parsed_allowlist = None
+    if cli_allowlist:
+        try:
+            parsed_allowlist = parse_ip_allowlist(cli_allowlist)
+        except ValueError as exc:
+            raise click.ClickException(f"Invalid ip_allowlist: {exc}")
+
+    configured_oauth = bool(oauth_client_id and oauth_client_secret)
+
+    if (
+        transport != Transport.STDIO.value
+        and not is_loopback_host(host)
+        and not auth_key
+        and not configured_oauth
+        and not allow_insecure_remote
+    ):
         raise click.ClickException(
             f"Refusing to bind HTTP transport to '{host}' without authentication.\n"
-            "  Use --auth-key <token> to require a Bearer token on all requests.\n"
+            "  Use --auth-key <token> or --oauth-client-id/--oauth-client-secret.\n"
             "  Or pass --allow-insecure-remote to explicitly allow unauthenticated access (not recommended)."
         )
 
-    if (auth_key or ip_allowlist) and transport == Transport.STDIO.value:
+    if (auth_key or cli_allowlist) and transport == Transport.STDIO.value:
         logger.warning("--auth-key / --ip-allowlist have no effect on stdio transport")
 
-    tiers = get_tier_labels(enabled_tools)
+    # Set up OAuth routes if configured (HTTP transports only)
+    oauth_validator = None
+    if configured_oauth and transport != Transport.STDIO.value:
+        mcp = _build_mcp()
+        oauth_store = OAuthStore()
+        scheme = "https" if (ssl_certfile and ssl_keyfile) else "http"
+        issuer = f"{scheme}://{host}:{port}"
+        routes = build_oauth_routes(
+            store=oauth_store,
+            issuer=issuer,
+            configured_client_id=oauth_client_id,
+            configured_client_secret=oauth_client_secret,
+        )
+        for path, (handler, methods) in routes.items():
+            mcp.custom_route(path, methods=methods)(handler)
+        oauth_validator = lambda tok: validate_oauth_token(oauth_store, tok)  # noqa: E731
+
     scheme = "https" if ssl_certfile else "http"
     logger.debug(
-        "Starting windows-mcp (transport=%s, %s, auth=%s, ip-allowlist=%s, tiers=%s, tools=%d)",
+        "Starting windows-mcp (transport=%s, %s, auth=%s, oauth=%s, ip-allowlist=%s, tools=%s, exclude=%s)",
         transport,
         scheme,
         "on" if auth_key else "off",
-        ip_allowlist or "off",
-        ",".join(tiers),
-        len(enabled_tools),
+        "on" if configured_oauth else "off",
+        cli_allowlist or "off",
+        cli_tools or "all",
+        cli_exclude or "none",
     )
     try:
         _run_server(
@@ -338,14 +466,282 @@ def main(transport, host, port, debug, auth_key, allow_insecure_remote, ip_allow
             port=port,
             auth_key=auth_key,
             ip_allowlist=parsed_allowlist,
-            enabled_tools=enabled_tools,
+            explicit_tools=cli_tools or None,
+            exclude_tools=cli_exclude or None,
             ssl_certfile=ssl_certfile,
             ssl_keyfile=ssl_keyfile,
+            oauth_validator=oauth_validator,
         )
         logger.debug("Server shut down normally")
     except Exception:
         logger.error("Server exiting due to unhandled exception", exc_info=True)
         raise
+
+
+def _gen_tls(host: str, cert_path, key_path) -> None:
+    """Generate a TLS cert/key pair, preferring mkcert over openssl."""
+    from pathlib import Path
+
+    cert_path = Path(cert_path)
+    key_path = Path(key_path)
+
+    mkcert = subprocess.run(["where", "mkcert"], capture_output=True).returncode == 0
+
+    if mkcert:
+        click.echo("mkcert detected — generating a locally-trusted certificate...")
+        install = subprocess.run(["mkcert", "-install"], capture_output=True, text=True)
+        if install.returncode != 0:
+            raise click.ClickException(f"mkcert -install failed:\n{install.stderr.strip()}")
+
+        sans = [host] if host not in ("0.0.0.0", "") else ["localhost", "127.0.0.1", "::1"]
+        result = subprocess.run(
+            [
+                "mkcert",
+                "-cert-file", str(cert_path),
+                "-key-file", str(key_path),
+                *sans,
+            ],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise click.ClickException(f"mkcert failed:\n{result.stderr.strip()}")
+        click.echo("  Certificate is automatically trusted by Windows.")
+    else:
+        click.echo("mkcert not found — falling back to openssl (self-signed)...")
+        click.echo("  Tip: winget install FiloSottile.mkcert  for auto-trusted certs next time.")
+        result = subprocess.run(
+            [
+                "openssl", "req", "-x509", "-newkey", "rsa:4096",
+                "-keyout", str(key_path),
+                "-out", str(cert_path),
+                "-days", "365", "-nodes",
+                "-subj", f"/CN={host or 'windows-mcp'}",
+            ],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            raise click.ClickException(f"openssl failed:\n{result.stderr.strip()}")
+        click.echo("  To make Windows trust this cert, run in an elevated PowerShell:")
+        click.echo(f'    Import-Certificate -FilePath "{cert_path}" -CertStoreLocation Cert:\\LocalMachine\\Root')
+
+    click.echo(f"  cert → {cert_path}")
+    click.echo(f"  key  → {key_path}")
+
+
+_TASK_NAME = "windows-mcp-server"
+_START_SCRIPT_PATH = CONFIG_DIR / "start-server.cmd"
+
+
+def _resolve_program() -> list[str]:
+    """Return the argv prefix to invoke `windows-mcp serve` from Task Scheduler."""
+    windows_mcp = shutil.which("windows-mcp")
+    if windows_mcp:
+        # Avoid paths inside uv's ephemeral tool cache (uvx runs)
+        if not any(m in windows_mcp for m in (".cache\\uv", ".cache/uv", "uv\\tools", "uv/tools")):
+            return [windows_mcp]
+    uvx = shutil.which("uvx")
+    if uvx:
+        return [uvx, "windows-mcp"]
+    raise click.ClickException(
+        "Cannot find windows-mcp or uvx in PATH.\n"
+        "Install via: pip install windows-mcp  or  winget install astral-sh.uv"
+    )
+
+
+def _build_start_script(program_args: list[str]) -> str:
+    log_out = CONFIG_DIR / "server.log"
+    log_err = CONFIG_DIR / "server.error.log"
+    command = subprocess.list2cmdline(program_args)
+    return (
+        "@echo off\n"
+        "setlocal\n"
+        f"{command} 1>>\"{log_out}\" 2>>\"{log_err}\"\n"
+    )
+
+
+def _schtasks(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["schtasks", *args], capture_output=True, text=True)
+
+
+@main.command()
+@click.option(
+    "--transport",
+    type=click.Choice(["sse", "streamable-http"]),
+    default="streamable-http",
+    show_default=True,
+    help="Transport for the background server (stdio not supported as a service).",
+)
+@click.option("--host", default="127.0.0.1", show_default=True, help="Host to bind.")
+@click.option("--port", default=8000, show_default=True, type=int, help="Port to bind.")
+@click.option("--force", is_flag=True, help="Reinstall even if already installed.")
+def install(transport: str, host: str, port: int, force: bool) -> None:
+    """Install windows-mcp as a scheduled task that starts at login."""
+    query = _schtasks("/Query", "/TN", _TASK_NAME)
+    if query.returncode == 0 and not force:
+        click.echo(f"Scheduled task '{_TASK_NAME}' is already installed.")
+        click.echo("Use --force to reinstall.")
+        return
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    exe = _resolve_program()
+    args = exe + ["serve", "--transport", transport, "--host", host, "--port", str(port)]
+    _START_SCRIPT_PATH.write_text(_build_start_script(args), encoding="utf-8")
+    task_command = subprocess.list2cmdline([str(_START_SCRIPT_PATH)])
+
+    # Remove any existing task first when forcing a reinstall.
+    _schtasks("/Delete", "/TN", _TASK_NAME, "/F")
+
+    result = _schtasks(
+        "/Create",
+        "/SC",
+        "ONLOGON",
+        "/TN",
+        _TASK_NAME,
+        "/TR",
+        task_command,
+        "/F",
+    )
+    if result.returncode != 0:
+        raise click.ClickException(f"schtasks /Create failed:\n{result.stderr.strip() or result.stdout.strip()}")
+
+    run_result = _schtasks("/Run", "/TN", _TASK_NAME)
+    if run_result.returncode != 0:
+        raise click.ClickException(f"schtasks /Run failed:\n{run_result.stderr.strip() or run_result.stdout.strip()}")
+
+    click.echo("Scheduled task installed — server is starting now.")
+    click.echo(f"  Task      : {_TASK_NAME}")
+    click.echo(f"  Transport : {transport}")
+    click.echo(f"  Address   : {host}:{port}")
+    click.echo(f"  Logs      : {CONFIG_DIR / 'server.log'}")
+    click.echo("\nThe server will restart automatically at every login.")
+    click.echo("Run `windows-mcp uninstall` to remove it.")
+
+
+@main.command()
+def uninstall() -> None:
+    """Remove the windows-mcp scheduled task and stop the background server."""
+    stop_result = _schtasks("/End", "/TN", _TASK_NAME)
+    if stop_result.returncode == 0:
+        click.echo("Stopped the running server.")
+
+    delete_result = _schtasks("/Delete", "/TN", _TASK_NAME, "/F")
+    if delete_result.returncode == 0:
+        click.echo(f"Removed scheduled task '{_TASK_NAME}'.")
+    else:
+        click.echo("No scheduled task found.")
+
+    if _START_SCRIPT_PATH.exists():
+        _START_SCRIPT_PATH.unlink()
+        click.echo(f"Removed {_START_SCRIPT_PATH}")
+
+    click.echo("windows-mcp will no longer start at login.")
+
+
+@main.command()
+@click.option(
+    "--transport",
+    type=click.Choice(["stdio", "sse", "streamable-http"]),
+    default="sse",
+    show_default=True,
+    help="Transport mode to configure. Saves the choice to config.toml.",
+)
+@click.option(
+    "--host",
+    default="0.0.0.0",
+    show_default=True,
+    help="Host to bind the server to.",
+)
+@click.option(
+    "--port",
+    default=8000,
+    show_default=True,
+    type=int,
+    help="Port to bind the server to.",
+)
+@click.option("--with-tls", is_flag=True, help="Generate a self-signed TLS certificate and key.")
+@click.option("--force", is_flag=True, help="Overwrite existing credentials without prompting.")
+def auth(transport: str, host: str, port: int, with_tls: bool, force: bool) -> None:
+    """Generate an auth key (and optionally TLS certs) and save to ~/.windows-mcp/config.toml."""
+    config_path = CONFIG_FILE
+
+    cfg = load_config(config_path) if config_path.exists() else WindowsMCPConfig()
+
+    if cfg.server.auth_key and not force:
+        click.echo(f"Auth key already set in {config_path}. Use --force to regenerate.")
+        return
+
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    new_key = secrets.token_urlsafe(32)
+    cfg.server.auth_key = new_key
+    cfg.server.transport = transport
+    cfg.server.host = host
+    cfg.server.port = port
+    click.echo(f"Generated auth key: {new_key}")
+
+    if with_tls:
+        if transport == "stdio":
+            raise click.ClickException("TLS has no effect on stdio transport.")
+        cert_path = CONFIG_DIR / "cert.pem"
+        key_path = CONFIG_DIR / "key.pem"
+        _gen_tls(host, cert_path, key_path)
+        cfg.server.ssl_certfile = str(cert_path)
+        cfg.server.ssl_keyfile = str(key_path)
+
+    write_config(cfg, config_path)
+    click.echo(f"\nSaved to {config_path}")
+
+    if transport == "stdio":
+        click.echo("\n─── Claude Desktop config (stdio) ───")
+        click.echo(
+            """\
+{
+  "mcpServers": {
+    "windows-mcp": {
+      "command": "uvx",
+      "args": ["windows-mcp", "serve"]
+    }
+  }
+}"""
+        )
+        return
+
+    scheme = "https" if with_tls else "http"
+    mcp_url = f"{scheme}://{host}:{port}/mcp/"
+    sse_url = f"{scheme}://{host}:{port}/sse"
+
+    click.echo("\n─── Start the server ───")
+    click.echo("  windows-mcp serve")
+
+    if transport == "sse":
+        click.echo("\n─── Claude Desktop config (SSE) ───")
+        click.echo(
+            f"""\
+{{
+  "mcpServers": {{
+    "windows-mcp": {{
+      "type": "sse",
+      "url": "{sse_url}",
+      "headers": {{ "Authorization": "Bearer {new_key}" }}
+    }}
+  }}
+}}"""
+        )
+    else:
+        click.echo("\n─── Claude Desktop config (Streamable HTTP) ───")
+        click.echo(
+            f"""\
+{{
+  "mcpServers": {{
+    "windows-mcp": {{
+      "type": "http",
+      "url": "{mcp_url}",
+      "headers": {{ "Authorization": "Bearer {new_key}" }}
+    }}
+  }}
+}}"""
+        )
 
 
 if __name__ == "__main__":

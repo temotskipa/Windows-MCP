@@ -77,41 +77,28 @@ mcp-name: io.github.CursorTouch/Windows-MCP
 - UV (Package Manager) from Astra, install with `pip install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - `English` as the default language in Windows preferred else disable the `App-Tool` in the MCP Server for Windows with other languages.
 
-<details>
-  <summary>Install in Pi</summary>
+### Run at Login
 
-  Install Windows-MCP as a Pi extension in one step:
+Run the server directly when needed:
 
-  ```powershell
-  pi install git:github.com/CursorTouch/Windows-MCP
-  ```
+```shell
+uvx windows-mcp
+uvx windows-mcp --transport sse --host localhost --port 8000
+uvx windows-mcp --transport streamable-http --host localhost --port 8000
+```
 
-  Or try it without installing globally:
+Install it as a background task that starts now and at every login:
 
-  ```powershell
-  pi -e git:github.com/CursorTouch/Windows-MCP
-  ```
+```shell
+windows-mcp install
 
-  For local development from a checkout:
+# Or choose the HTTP transport and bind address explicitly
+windows-mcp install --transport sse --host 127.0.0.1 --port 8000
+```
 
-  ```powershell
-  git clone https://github.com/CursorTouch/Windows-MCP.git
-  cd Windows-MCP
-  uv sync
-  npm install
-  pi
-  ```
-
-  Pi exposes the Windows-MCP desktop tools as `win_snapshot`, `win_screenshot`, `win_app`, `win_click`, `win_type`, `win_move`, `win_scroll`, `win_shortcut`, and `win_wait`.
-
-  If you manually copy the Pi extension outside this repo, set `WINDOWS_MCP_ROOT` to the checkout path first:
-
-  ```powershell
-  $env:WINDOWS_MCP_ROOT = "C:\\path\\to\\Windows-MCP"
-  ```
-
-  See [Pi integration notes](docs/pi-integration.md) for usage guidance.
-</details>
+This creates a per-user Scheduled Task named `windows-mcp-server` and a wrapper script at
+`~/.windows-mcp/start-server.cmd`. Use `windows-mcp uninstall` to remove it. Logs are written
+to `~/.windows-mcp/server.log` and `~/.windows-mcp/server.error.log`.
 
 <details>
   <summary>Install in Claude Desktop</summary>
@@ -498,26 +485,120 @@ windows-mcp --auth-key "token" --ip-allowlist "203.0.113.0/24,198.51.100.5"
 ```
 Restricts connections to specified CIDR ranges. Blocks private/loopback IPs by default.
 
-### Tool Tiers
-Three access levels: Tier 1 (read-only, default on) → Tier 2 (interactive, default on) → Tier 3 (destructive, default off)
+### Tool Selection
+All tools are enabled by default. Use `--tools` to whitelist specific tools, or `--exclude-tools` to block specific ones.
 
 ```shell
-windows-mcp --disable-tier2          # Read-only only
-windows-mcp --enable-tier3           # Enable destructive tools
-windows-mcp --tools "Screenshot,Click"  # Whitelist specific tools
+windows-mcp --tools "Screenshot,Click,Snapshot"   # Enable only these tools
+windows-mcp --exclude-tools "PowerShell,Registry" # Disable specific tools
 ```
-
-| Tier | Tools |
-|---|---|
-| 1 | Screenshot, Snapshot, Wait, Notification |
-| 2 | Click, Type, Scroll, Move, Shortcut, MultiSelect, MultiEdit, Clipboard, Scrape |
-| 3 | App, PowerShell, FileSystem, Registry, Process |
 
 ### TLS/HTTPS
 ```shell
 openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
 
 windows-mcp --ssl-certfile cert.pem --ssl-keyfile key.pem
+```
+
+### OAuth 2.0 + PKCE
+
+For MCP clients that use OAuth (e.g. Claude Desktop) instead of a static API key:
+
+```shell
+windows-mcp --transport streamable-http --host 0.0.0.0 \
+  --ssl-certfile ~/.windows-mcp/cert.pem \
+  --ssl-keyfile  ~/.windows-mcp/key.pem \
+  --oauth-client-id my-client \
+  --oauth-client-secret my-secret
+```
+
+**Claude Desktop config:**
+```json
+{
+  "mcpServers": {
+    "windows-mcp": {
+      "type": "http",
+      "url": "https://<host>:8000/mcp/",
+      "oauth": {
+        "clientId": "my-client",
+        "clientSecret": "my-secret"
+      }
+    }
+  }
+}
+```
+
+The OAuth server exposes:
+- `GET /.well-known/oauth-authorization-server` — server metadata (RFC 8414)
+- `GET /oauth/authorize` — Authorization Code + PKCE (`S256` required)
+- `POST /oauth/token` — token exchange (client secret required)
+- `POST /oauth/register` — disabled; clients must be pre-provisioned
+
+Dynamic client registration is disabled. Redirect URIs must be loopback `http(s)` only.
+Auth key and OAuth can coexist — both are accepted as valid Bearer tokens.
+
+### Config File (`~/.windows-mcp/config.toml`)
+
+Instead of passing flags every time, store your configuration in `~/.windows-mcp/config.toml`. CLI flags always override config file values.
+
+**Search order:**
+1. `--config /path/to/config.toml`
+2. `~/.windows-mcp/config.toml`
+
+**stdio** — local only, no security needed:
+```toml
+[server]
+transport = "stdio"
+```
+
+**SSE** — network access with auth and IP restriction:
+```toml
+[server]
+transport = "sse"
+host      = "0.0.0.0"
+port      = 8000
+auth_key  = "your-secret-key"
+
+[security]
+ip_allowlist = ["192.168.1.0/24"]
+```
+
+**Streamable HTTP** — with auth, TLS, and tool exclusions:
+```toml
+[server]
+transport    = "streamable-http"
+host         = "0.0.0.0"
+port         = 8000
+auth_key     = "your-secret-key"
+ssl_certfile = "cert.pem"   # resolved relative to ~/.windows-mcp/
+ssl_keyfile  = "key.pem"
+
+[security]
+ip_allowlist        = ["192.168.1.0/24"]
+oauth_client_id     = "my-client"      # optional — enables OAuth 2.0 + PKCE
+oauth_client_secret = "my-secret"
+
+[tools]
+exclude = ["PowerShell", "Registry"]   # disable specific tools
+```
+
+Place cert and key files in the same directory:
+
+```
+~/.windows-mcp/
+├── config.toml
+├── cert.pem
+└── key.pem
+```
+
+Generate a self-signed cert directly into that directory:
+
+```shell
+mkdir -p ~/.windows-mcp
+openssl req -x509 -newkey rsa:4096 \
+  -keyout ~/.windows-mcp/key.pem \
+  -out ~/.windows-mcp/cert.pem \
+  -days 365 -nodes
 ```
 
 ### SSRF Protection
@@ -543,7 +624,7 @@ All variables are optional unless noted. Set them via the `env` key in `claude_d
 |---|---|---|
 | `WINDOWS_MCP_AUTH_KEY` | _(none)_ | Bearer token required on all HTTP requests. Alternative to `--auth-key` CLI flag. |
 | `WINDOWS_MCP_IP_ALLOWLIST` | _(none)_ | Comma-separated list of allowed client IPs or CIDR ranges (e.g., `203.0.113.0/24,198.51.100.5`). Alternative to `--ip-allowlist` CLI flag. |
-| `WINDOWS_MCP_TOOLS` | _(tier-based)_ | Comma-separated explicit list of tools to enable, overrides tier settings (e.g., `Screenshot,Click,Snapshot`). Alternative to `--tools` CLI flag. |
+| `WINDOWS_MCP_TOOLS` | _(all enabled)_ | Comma-separated explicit list of tools to enable (e.g., `Screenshot,Click,Snapshot`). Alternative to `--tools` CLI flag. |
 | `WINDOWS_MCP_EXCLUDE_TOOLS` | _(none)_ | Comma-separated list of tools to disable (e.g., `PowerShell,Registry`). Alternative to `--exclude-tools` CLI flag. |
 | `WINDOWS_MCP_SSL_CERTFILE` | _(none)_ | Path to TLS certificate file (.pem) for HTTPS. Must be provided with `WINDOWS_MCP_SSL_KEYFILE`. |
 | `WINDOWS_MCP_SSL_KEYFILE` | _(none)_ | Path to TLS private key file (.pem) for HTTPS. Must be provided with `WINDOWS_MCP_SSL_CERTFILE`. |
