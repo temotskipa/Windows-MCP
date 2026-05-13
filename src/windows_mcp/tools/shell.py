@@ -1,7 +1,7 @@
 """PowerShell tool — shell/command execution."""
 
 from mcp.types import ToolAnnotations
-from windows_mcp.analytics import with_analytics
+from windows_mcp.infrastructure import with_analytics
 from windows_mcp.desktop.powershell import PowerShellExecutor
 from fastmcp import Context
 

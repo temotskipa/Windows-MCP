@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PIL import ImageFont, ImageDraw, Image
 from windows_mcp.tree.service import Tree
 from windows_mcp.desktop import screenshot as screenshot_capture
+from windows_mcp.infrastructure import validate_url
 from locale import getpreferredencoding
 from contextlib import contextmanager
 from typing import Literal
@@ -757,6 +758,7 @@ class Desktop:
             self.type((x, y), text=text, clear=True)
 
     def scrape(self, url: str) -> str:
+        validate_url(url)
         try:
             response = requests.get(url, timeout=10)
             response.raise_for_status()

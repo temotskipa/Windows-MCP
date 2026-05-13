@@ -4,7 +4,7 @@ from typing import Annotated
 
 from mcp.types import ToolAnnotations
 from pydantic import Field
-from windows_mcp.analytics import with_analytics
+from windows_mcp.infrastructure import with_analytics
 from fastmcp import Context
 
 

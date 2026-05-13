@@ -424,6 +424,19 @@ uvx windows-mcp --transport streamable-http --host localhost --port 8000
 
 Optional environment variables can be set to customize behavior — see [Environment Variables](#-environment-variables) below.
 
+### Security for Remote Access
+
+For network access, enable authentication and TLS:
+
+```shell
+windows-mcp --transport sse --host 0.0.0.0 \
+  --auth-key "your_secret_token" \
+  --ip-allowlist "203.0.113.0/24" \
+  --ssl-certfile cert.pem --ssl-keyfile key.pem
+```
+
+See [🔐 Security & Access Control](#-security--access-control) for all options.
+
 ### Transport Options
 
 | Transport | Flag | Use Case |
@@ -431,6 +444,47 @@ Optional environment variables can be set to customize behavior — see [Environ
 | `stdio` (default) | `--transport stdio` | Direct connection from MCP clients like Claude Desktop, Cursor, etc. |
 | `sse` | `--transport sse --host HOST --port PORT` | Network-accessible via Server-Sent Events |
 | `streamable-http` | `--transport streamable-http --host HOST --port PORT` | Network-accessible via HTTP streaming (recommended for production) |
+
+---
+
+## 🔐 Security & Access Control
+
+### Authentication
+```shell
+windows-mcp --transport sse --host 0.0.0.0 --auth-key "your_token"
+```
+Requires `Authorization: Bearer your_token` header on all requests.
+
+### IP Allowlist
+```shell
+windows-mcp --auth-key "token" --ip-allowlist "203.0.113.0/24,198.51.100.5"
+```
+Restricts connections to specified CIDR ranges. Blocks private/loopback IPs by default.
+
+### Tool Tiers
+Three access levels: Tier 1 (read-only, default on) → Tier 2 (interactive, default on) → Tier 3 (destructive, default off)
+
+```shell
+windows-mcp --disable-tier2          # Read-only only
+windows-mcp --enable-tier3           # Enable destructive tools
+windows-mcp --tools "Screenshot,Click"  # Whitelist specific tools
+```
+
+| Tier | Tools |
+|---|---|
+| 1 | Screenshot, Snapshot, Wait, Notification |
+| 2 | Click, Type, Scroll, Move, Shortcut, MultiSelect, MultiEdit, Clipboard, Scrape |
+| 3 | App, PowerShell, FileSystem, Registry, Process |
+
+### TLS/HTTPS
+```shell
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+
+windows-mcp --ssl-certfile cert.pem --ssl-keyfile key.pem
+```
+
+### SSRF Protection
+`Scrape` tool blocks: private IPs, loopback, link-local, credentials-in-URLs, non-HTTP schemes.
 
 ---
 
@@ -446,6 +500,17 @@ All variables are optional unless noted. Set them via the `env` key in `claude_d
 | `WINDOWS_MCP_SCREENSHOT_BACKEND` | `auto` | Screenshot capture backend. Accepted values: `auto` (tries dxcam → mss → pillow in order), `dxcam`, `mss`, `pillow`. Use `mss` or `pillow` if `dxcam` is unavailable or causes issues on your GPU. |
 | `WINDOWS_MCP_PROFILE_SNAPSHOT` | _(disabled)_ | Set to `1`, `true`, `yes`, or `on` to emit per-stage timing logs for Screenshot/Snapshot calls. Useful for diagnosing slow captures. |
 
+### Security
+
+| Variable | Default | Description |
+|---|---|---|
+| `WINDOWS_MCP_AUTH_KEY` | _(none)_ | Bearer token required on all HTTP requests. Alternative to `--auth-key` CLI flag. |
+| `WINDOWS_MCP_IP_ALLOWLIST` | _(none)_ | Comma-separated list of allowed client IPs or CIDR ranges (e.g., `203.0.113.0/24,198.51.100.5`). Alternative to `--ip-allowlist` CLI flag. |
+| `WINDOWS_MCP_TOOLS` | _(tier-based)_ | Comma-separated explicit list of tools to enable, overrides tier settings (e.g., `Screenshot,Click,Snapshot`). Alternative to `--tools` CLI flag. |
+| `WINDOWS_MCP_EXCLUDE_TOOLS` | _(none)_ | Comma-separated list of tools to disable (e.g., `PowerShell,Registry`). Alternative to `--exclude-tools` CLI flag. |
+| `WINDOWS_MCP_SSL_CERTFILE` | _(none)_ | Path to TLS certificate file (.pem) for HTTPS. Must be provided with `WINDOWS_MCP_SSL_KEYFILE`. |
+| `WINDOWS_MCP_SSL_KEYFILE` | _(none)_ | Path to TLS private key file (.pem) for HTTPS. Must be provided with `WINDOWS_MCP_SSL_CERTFILE`. |
+
 ### Telemetry
 
 | Variable | Default | Description |
@@ -458,22 +523,33 @@ All variables are optional unless noted. Set them via the `env` key in `claude_d
 |---|---|---|
 | `WINDOWS_MCP_DEBUG` | `false` | Set to `1`, `true`, `yes`, or `on` to enable debug mode, which sets the log level to DEBUG for verbose output. Also available as the `--debug` CLI flag. |
 
-**Example `claude_desktop_config.json` configuration:**
+**Example `claude_desktop_config.json`:**
 
+Local (no security):
 ```json
 {
   "mcpServers": {
     "windows-mcp": {
       "command": "uvx",
-      "args": [
-        "windows-mcp"
-      ],
+      "args": ["windows-mcp"],
+      "env": { "WINDOWS_MCP_SCREENSHOT_SCALE": "0.5" }
+    }
+  }
+}
+```
+
+Remote (with auth + IP allowlist + TLS):
+```json
+{
+  "mcpServers": {
+    "windows-mcp": {
+      "command": "uvx",
+      "args": ["windows-mcp", "--transport", "sse", "--host", "0.0.0.0"],
       "env": {
-        "WINDOWS_MCP_SCREENSHOT_SCALE": "0.5",
-        "WINDOWS_MCP_SCREENSHOT_BACKEND": "auto",
-        "WINDOWS_MCP_PROFILE_SNAPSHOT": "false",
-        "ANONYMIZED_TELEMETRY": "true",
-        "WINDOWS_MCP_DEBUG": "false"
+        "WINDOWS_MCP_AUTH_KEY": "your_token",
+        "WINDOWS_MCP_IP_ALLOWLIST": "203.0.113.0/24",
+        "WINDOWS_MCP_SSL_CERTFILE": "/path/to/cert.pem",
+        "WINDOWS_MCP_SSL_KEYFILE": "/path/to/key.pem"
       }
     }
   }

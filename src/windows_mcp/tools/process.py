@@ -3,7 +3,7 @@
 from typing import Literal
 
 from mcp.types import ToolAnnotations
-from windows_mcp.analytics import with_analytics
+from windows_mcp.infrastructure import with_analytics
 from fastmcp import Context
 
 
