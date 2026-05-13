@@ -124,12 +124,7 @@ class Desktop:
         # Fast path for Screenshot tool (use_ui_tree=False): skip window enumeration.
         # UIAutomation calls (get_controls_handles / get_windows / get_active_window)
         # can hang when an app is launching and not responding to WM messages.
-        # Also skip when the Secure Desktop is active (UAC prompt): UIA cannot
-        # cross the Winlogon desktop boundary from user mode, so all calls
-        # return None and crash attempting to walk the accessibility tree.
-        from windows_mcp.desktop.screenshot import is_secure_desktop_active
-        uac_active = is_secure_desktop_active()
-        if use_ui_tree and not uac_active:
+        if use_ui_tree:
             controls_handles = self.get_controls_handles()  # Taskbar,Program Manager,Apps, Dialogs
             windows, windows_handles = self.get_windows(controls_handles=controls_handles)  # Apps
             active_window = self.get_active_window(windows=windows)  # Active Window
@@ -163,10 +158,7 @@ class Desktop:
         logger.debug(f"Active window: {active_window or 'No Active Window Found'}")
         logger.debug(f"Windows: {windows}")
 
-        if uac_active and use_ui_tree:
-            # UIA tree via the host service — the only way to read the UAC dialog.
-            tree_state = self._build_uac_tree_state()
-        elif use_ui_tree:
+        if use_ui_tree:
             other_windows_handles = list(controls_handles - windows_handles)
             tree_state = self.tree.get_state(
                 active_window_handle, other_windows_handles, use_dom=use_dom
@@ -641,26 +633,11 @@ class Desktop:
             results.append((element_node.center.x, element_node.center.y))
         return results
 
-    def click(self, loc: tuple[int, int] | list[int], button: str = "left", clicks: int = 2):
+    def click(self, loc: tuple[int, int]|list[int], button: str = "left", clicks: int = 2):
         if isinstance(loc, list):
             x, y = loc[0], loc[1]
         else:
             x, y = loc
-
-        # With PromptOnSecureDesktop disabled (set by `windows-mcp service install`),
-        # UAC prompts appear on the Default desktop and uia.Click() reaches them via
-        # SendInput — hardware-level input that bypasses UIPI.
-        # The service route below is a fallback for the rare case where the policy
-        # wasn't applied (secure desktop still active).
-        from windows_mcp.desktop.screenshot import is_secure_desktop_active
-        if button == "left" and is_secure_desktop_active():
-            from windows_mcp.service import get_host_client
-            try:
-                get_host_client().uia_click_at(x, y)
-            except Exception as exc:
-                logger.warning("UAC click via service failed: %s", exc)
-            return
-
         if clicks == 0:
             uia.SetCursorPos(x, y)
             return
@@ -847,55 +824,11 @@ class Desktop:
             handles.add(secondary_taskbar_hwnd)
         return handles
 
-    def _build_uac_tree_state(self) -> TreeState:
-        """Build a TreeState from the host service UIA tree (used during UAC)."""
-        from windows_mcp.service import get_host_client
-        try:
-            raw = get_host_client().uia_tree()
-        except Exception as exc:
-            logger.warning("_build_uac_tree_state: service call failed: %s", exc)
-            return TreeState(status=False)
-
-        interactive: list[TreeElementNode] = []
-
-        def _walk(node: dict, window_name: str) -> None:
-            bbox = node.get("bbox", {})
-            center = node.get("center", {})
-            ctrl = node.get("control_type", "")
-            name = node.get("name", "")
-            can_invoke = node.get("can_invoke", False)
-
-            # Include buttons and any invokable element as interactive nodes.
-            if bbox and center and (can_invoke or ctrl.lower() in ("button",)):
-                bb = BoundingBox(
-                    left=bbox["left"], top=bbox["top"],
-                    right=bbox["right"], bottom=bbox["bottom"],
-                    width=bbox["width"], height=bbox["height"],
-                )
-                c = Center(x=center["x"], y=center["y"])
-                interactive.append(TreeElementNode(
-                    name=name,
-                    control_type=ctrl + "Control" if ctrl else "Control",
-                    window_name=window_name,
-                    bounding_box=bb,
-                    center=c,
-                    metadata={},
-                ))
-            for child in node.get("children", []):
-                _walk(child, window_name)
-
-        for top in raw:
-            _walk(top, top.get("name", "Secure Desktop"))
-
-        return TreeState(status=True, interactive_nodes=interactive)
-
     def get_active_window(self, windows: list[Window] | None = None) -> Window | None:
         try:
             if windows is None:
                 windows, _ = self.get_windows()
             active_window = self.get_foreground_window()
-            if active_window is None:
-                return None
             if active_window.ClassName == "Progman":
                 return None
             active_window_handle = active_window.NativeWindowHandle
@@ -933,8 +866,6 @@ class Desktop:
 
     def get_window_from_element_handle(self, element_handle: int) -> uia.Control:
         current = uia.ControlFromHandle(element_handle)
-        if current is None:
-            return None
         root_handle = uia.GetRootControl().NativeWindowHandle
 
         while True:
