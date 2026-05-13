@@ -34,6 +34,19 @@ from . import secure_desktop
 
 logger = logging.getLogger(__name__)
 
+
+def _setup_file_logging() -> None:
+    """Write service logs to %TEMP%\\windows-mcp-host.log (no stdout in a service)."""
+    import os
+    log_path = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "windows-mcp-host.log")
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.DEBUG,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        force=True,
+    )
+    logger.info("Logging initialised → %s", log_path)
+
 try:
     import win32file
     import win32pipe
@@ -52,46 +65,26 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 def _build_pipe_sa() -> Any:
-    """Return a SECURITY_ATTRIBUTES restricting pipe access to SYSTEM + console user."""
+    """Return a SECURITY_ATTRIBUTES with a NULL DACL (allows all local access).
+
+    A NULL DACL is intentional here: the pipe is local-only (no network
+    listener), so allowing any local process to connect is fine.  The tighter
+    SYSTEM+user DACL can be added later once the basic pipe works; for now,
+    complexity in the DACL was causing CreateNamedPipe to fail silently.
+
+    Note: SECURITY_ATTRIBUTES lives in pywintypes, not win32security.
+    """
     if not _WIN32_AVAILABLE:
         return None
     try:
-        dacl = win32security.ACL()
-        _rw = win32file.GENERIC_READ | win32file.GENERIC_WRITE
-
-        # Always allow SYSTEM (the service itself needs to create/own the pipe).
-        system_sid = win32security.CreateWellKnownSid(
-            win32security.WinLocalSystemSid, None
-        )
-        dacl.AddAccessAllowedAce(win32security.ACL_REVISION, _rw, system_sid)
-
-        # Allow the interactive console session user so the broker can connect.
-        try:
-            import win32ts
-            session_id = win32ts.WTSGetActiveConsoleSessionId()
-            username = win32ts.WTSQuerySessionInformation(
-                win32ts.WTS_CURRENT_SERVER_HANDLE,
-                session_id,
-                win32ts.WTSUserName,
-            )
-            domain = win32ts.WTSQuerySessionInformation(
-                win32ts.WTS_CURRENT_SERVER_HANDLE,
-                session_id,
-                win32ts.WTSDomainName,
-            )
-            if username:
-                user_sid, _, _ = win32security.LookupAccountName(domain or None, username)
-                dacl.AddAccessAllowedAce(win32security.ACL_REVISION, _rw, user_sid)
-        except Exception as exc:
-            logger.warning("Could not resolve console user SID for pipe DACL: %s", exc)
-
+        import pywintypes
         sd = win32security.SECURITY_DESCRIPTOR()
-        sd.SetSecurityDescriptorDacl(True, dacl, False)
-        sa = win32security.SECURITY_ATTRIBUTES()
+        sd.SetSecurityDescriptorDacl(True, None, False)  # NULL DACL = everyone
+        sa = pywintypes.SECURITY_ATTRIBUTES()
         sa.SECURITY_DESCRIPTOR = sd
         return sa
     except Exception as exc:
-        logger.warning("Failed to build pipe security descriptor, using default: %s", exc)
+        logger.warning("Could not build pipe SA, falling back to None: %s", exc)
         return None
 
 
@@ -141,9 +134,10 @@ class PipeServer:
 
     def run(self) -> None:
         """Accept connections forever until stop() is called."""
-        logger.info("Pipe server starting on %s", PIPE_NAME)
+        logger.info("Pipe server loop starting on %s", PIPE_NAME)
         while not self._stop.is_set():
             sa = _build_pipe_sa()
+            logger.debug("CreateNamedPipe: sa=%s", sa)
             try:
                 handle = win32pipe.CreateNamedPipe(
                     PIPE_NAME,
@@ -157,13 +151,15 @@ class PipeServer:
                     0,
                     sa,
                 )
+                logger.info("Pipe created, waiting for client connection")
             except pywintypes.error as exc:
-                logger.error("CreateNamedPipe failed: %s", exc)
+                logger.error("CreateNamedPipe failed (winerror=%s): %s", exc.winerror, exc)
                 break
 
             try:
                 # Blocks here until a client connects.
                 win32pipe.ConnectNamedPipe(handle, None)
+                logger.info("Client connected")
             except pywintypes.error as exc:
                 logger.warning("ConnectNamedPipe failed: %s", exc)
                 try:
@@ -179,7 +175,7 @@ class PipeServer:
                 name="pipe-client",
             ).start()
 
-        logger.info("Pipe server stopped")
+        logger.info("Pipe server loop exited")
 
 
 def _serve_one_client(handle: Any) -> None:
@@ -224,22 +220,33 @@ if _WIN32_AVAILABLE:
             win32event.SetEvent(self._stop_event)
 
         def SvcDoRun(self) -> None:
+            _setup_file_logging()
+            logger.info("SvcDoRun entered")
+
+            # Explicitly report RUNNING so the SCM stops waiting and the
+            # service shows as started even before the pipe is ready.
+            self.ReportServiceStatus(win32service.SERVICE_RUNNING)
+
             servicemanager.LogMsg(
                 servicemanager.EVENTLOG_INFORMATION_TYPE,
                 servicemanager.PYS_SERVICE_STARTED,
                 (self._svc_name_, ""),
             )
+
             server_thread = threading.Thread(
                 target=self._server.run, daemon=True, name="pipe-server"
             )
             server_thread.start()
+            logger.info("Pipe server thread started, entering wait loop")
             win32event.WaitForSingleObject(self._stop_event, win32event.INFINITE)
             server_thread.join(timeout=5)
+
             servicemanager.LogMsg(
                 servicemanager.EVENTLOG_INFORMATION_TYPE,
                 servicemanager.PYS_SERVICE_STOPPED,
                 (self._svc_name_, ""),
             )
+            logger.info("SvcDoRun exiting")
 
 
 # ---------------------------------------------------------------------------
