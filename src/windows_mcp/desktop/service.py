@@ -124,7 +124,12 @@ class Desktop:
         # Fast path for Screenshot tool (use_ui_tree=False): skip window enumeration.
         # UIAutomation calls (get_controls_handles / get_windows / get_active_window)
         # can hang when an app is launching and not responding to WM messages.
-        if use_ui_tree:
+        # Also skip when the Secure Desktop is active (UAC prompt): UIA cannot
+        # cross the Winlogon desktop boundary from user mode, so all calls
+        # return None and crash attempting to walk the accessibility tree.
+        from windows_mcp.desktop.screenshot import is_secure_desktop_active
+        uac_active = is_secure_desktop_active()
+        if use_ui_tree and not uac_active:
             controls_handles = self.get_controls_handles()  # Taskbar,Program Manager,Apps, Dialogs
             windows, windows_handles = self.get_windows(controls_handles=controls_handles)  # Apps
             active_window = self.get_active_window(windows=windows)  # Active Window
@@ -829,6 +834,8 @@ class Desktop:
             if windows is None:
                 windows, _ = self.get_windows()
             active_window = self.get_foreground_window()
+            if active_window is None:
+                return None
             if active_window.ClassName == "Progman":
                 return None
             active_window_handle = active_window.NativeWindowHandle
@@ -866,6 +873,8 @@ class Desktop:
 
     def get_window_from_element_handle(self, element_handle: int) -> uia.Control:
         current = uia.ControlFromHandle(element_handle)
+        if current is None:
+            return None
         root_handle = uia.GetRootControl().NativeWindowHandle
 
         while True:
