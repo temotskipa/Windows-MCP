@@ -76,6 +76,43 @@ mcp-name: io.github.CursorTouch/Windows-MCP
 - Python 3.13+
 - UV (Package Manager) from Astra, install with `pip install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - `English` as the default language in Windows preferred else disable the `App-Tool` in the MCP Server for Windows with other languages.
+
+<details>
+  <summary>Install in Pi</summary>
+
+  Install Windows-MCP as a Pi extension in one step:
+
+  ```powershell
+  pi install git:github.com/CursorTouch/Windows-MCP
+  ```
+
+  Or try it without installing globally:
+
+  ```powershell
+  pi -e git:github.com/CursorTouch/Windows-MCP
+  ```
+
+  For local development from a checkout:
+
+  ```powershell
+  git clone https://github.com/CursorTouch/Windows-MCP.git
+  cd Windows-MCP
+  uv sync
+  npm install
+  pi
+  ```
+
+  Pi exposes the Windows-MCP desktop tools as `win_snapshot`, `win_screenshot`, `win_app`, `win_click`, `win_type`, `win_move`, `win_scroll`, `win_shortcut`, and `win_wait`.
+
+  If you manually copy the Pi extension outside this repo, set `WINDOWS_MCP_ROOT` to the checkout path first:
+
+  ```powershell
+  $env:WINDOWS_MCP_ROOT = "C:\\path\\to\\Windows-MCP"
+  ```
+
+  See [Pi integration notes](docs/pi-integration.md) for usage guidance.
+</details>
+
 <details>
   <summary>Install in Claude Desktop</summary>
 
