@@ -647,9 +647,11 @@ class Desktop:
         else:
             x, y = loc
 
-        # During UAC the input desktop is Winlogon; normal SendInput calls go
-        # nowhere.  Route through the host service which uses UIA InvokePattern
-        # on the element at (x, y) — a direct COM call that works from Session 0.
+        # With PromptOnSecureDesktop disabled (set by `windows-mcp service install`),
+        # UAC prompts appear on the Default desktop and uia.Click() reaches them via
+        # SendInput — hardware-level input that bypasses UIPI.
+        # The service route below is a fallback for the rare case where the policy
+        # wasn't applied (secure desktop still active).
         from windows_mcp.desktop.screenshot import is_secure_desktop_active
         if button == "left" and is_secure_desktop_active():
             from windows_mcp.service import get_host_client
