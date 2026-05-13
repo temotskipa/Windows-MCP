@@ -29,6 +29,7 @@ import secrets
 import subprocess
 import click
 import os
+import sys
 import shutil
 
 logger = logging.getLogger(__name__)
@@ -820,25 +821,53 @@ def service_install(force: bool):
         except Exception as exc:
             raise click.ClickException(f"Failed to remove existing service: {exc}")
 
-    # Do NOT pass exeName here.  pywin32 ships PythonService.exe specifically
-    # to act as the SCM-visible executable; it handles CoInitialize, the
-    # SetServiceStatus handshake, and then loads our Python class.  Pointing
-    # the SCM at python.exe directly causes error 1053 because python.exe
-    # never calls SetServiceStatus(SERVICE_RUNNING).
+    # Register the service using win32service.CreateService directly so we
+    # can specify sys.executable as the binary.  This is critical when
+    # windows-mcp is installed in a venv: pywin32's PythonService.exe runs
+    # against the system Python and cannot import windows_mcp, causing 1053.
+    # Using sys.executable guarantees the exact interpreter that has the
+    # package is what the SCM launches.
+    #
+    # Binary path format: "<python.exe>" -m windows_mcp.service.host
+    # When the SCM starts this with no extra args, host.py calls
+    # servicemanager.StartServiceCtrlDispatcher() to enter the service loop.
+    from windows_mcp.service.host import WindowsMCPHostService
+    binary_path = f'"{sys.executable}" -m windows_mcp.service.host'
+
+    hscm = None
+    hs = None
     try:
-        win32serviceutil.InstallService(
-            pythonClassString=f"{WindowsMCPHostService.__module__}.{WindowsMCPHostService.__name__}",
-            serviceName=_SERVICE_NAME,
-            displayName=_SERVICE_DISPLAY,
-            description=WindowsMCPHostService._svc_description_,
-            startType=win32service.SERVICE_AUTO_START,
-            # userName=None → LocalSystem (pywin32 default); SYSTEM is required
-            # to open the Winlogon desktop for UAC capture.
+        hscm = win32service.OpenSCManager(None, None, win32service.SC_MANAGER_CREATE_SERVICE)
+        hs = win32service.CreateService(
+            hscm,
+            _SERVICE_NAME,
+            _SERVICE_DISPLAY,
+            win32service.SERVICE_ALL_ACCESS,
+            win32service.SERVICE_WIN32_OWN_PROCESS,
+            win32service.SERVICE_AUTO_START,
+            win32service.SERVICE_ERROR_NORMAL,
+            binary_path,
+            None,   # load order group
+            0,      # tag id
+            None,   # dependencies
+            None,   # service account → LocalSystem
+            None,   # password
         )
-    except Exception as exc:
+        win32service.ChangeServiceConfig2(
+            hs,
+            win32service.SERVICE_CONFIG_DESCRIPTION,
+            WindowsMCPHostService._svc_description_,
+        )
+    except pywintypes.error as exc:
         raise click.ClickException(f"Failed to install service: {exc}")
+    finally:
+        if hs:
+            win32service.CloseServiceHandle(hs)
+        if hscm:
+            win32service.CloseServiceHandle(hscm)
 
     click.echo(f"Service '{_SERVICE_NAME}' installed.")
+    click.echo(f"  Binary : {binary_path}")
 
     try:
         win32serviceutil.StartService(_SERVICE_NAME)

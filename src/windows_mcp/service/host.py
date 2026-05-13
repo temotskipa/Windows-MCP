@@ -247,12 +247,22 @@ if _WIN32_AVAILABLE:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    import sys
     if not _WIN32_AVAILABLE:
         raise SystemExit("pywin32 is required to run the host service")
-    if len(__import__("sys").argv) == 1:
-        servicemanager.Initialize()
-        servicemanager.PrepareToHostSingle(WindowsMCPHostService)
-        servicemanager.StartServiceCtrlDispatcher()
+
+    # When len(sys.argv) == 1 the process was launched by the SCM (no extra
+    # arguments).  We must call StartServiceCtrlDispatcher so the SCM
+    # dispatcher takes over and routes start/stop events to SvcDoRun/SvcStop.
+    if len(sys.argv) == 1:
+        try:
+            servicemanager.Initialize("WindowsMCPHost", None)
+            servicemanager.PrepareToHostSingle(WindowsMCPHostService)
+            servicemanager.StartServiceCtrlDispatcher()
+        except Exception as exc:
+            # Write to the Windows event log so failures are diagnosable.
+            servicemanager.LogErrorMsg(f"WindowsMCPHost failed to start: {exc}")
+            raise
     else:
         win32serviceutil.HandleCommandLine(WindowsMCPHostService)
 
