@@ -744,5 +744,166 @@ def auth(transport: str, host: str, port: int, with_tls: bool, force: bool) -> N
         )
 
 
+# ---------------------------------------------------------------------------
+# `windows-mcp service` command group
+# ---------------------------------------------------------------------------
+
+_SERVICE_NAME = "WindowsMCPHost"
+_SERVICE_DISPLAY = "Windows MCP Host"
+
+
+def _require_win32():
+    try:
+        import win32serviceutil  # noqa: F401
+    except ImportError:
+        raise click.ClickException(
+            "pywin32 is required for service management.  "
+            "Install it with: pip install pywin32"
+        )
+
+
+def _sc_state_name(state: int) -> str:
+    import win32service
+    return {
+        win32service.SERVICE_STOPPED: "STOPPED",
+        win32service.SERVICE_START_PENDING: "START_PENDING",
+        win32service.SERVICE_STOP_PENDING: "STOP_PENDING",
+        win32service.SERVICE_RUNNING: "RUNNING",
+        win32service.SERVICE_CONTINUE_PENDING: "CONTINUE_PENDING",
+        win32service.SERVICE_PAUSE_PENDING: "PAUSE_PENDING",
+        win32service.SERVICE_PAUSED: "PAUSED",
+    }.get(state, f"UNKNOWN({state})")
+
+
+@main.group()
+def service():
+    """Manage the Windows MCP host service (LocalSystem, required for UAC access).
+
+    The host service runs as NT AUTHORITY\\SYSTEM and exposes a local named pipe
+    so the MCP broker can capture screenshots and inspect UI elements even while
+    a UAC prompt is on screen.  It must be installed once from an elevated
+    (Administrator) prompt.
+    """
+
+
+@service.command("install")
+def service_install():
+    """Install and start the Windows MCP host service (requires elevation)."""
+    _require_win32()
+    import win32serviceutil
+    import win32service
+    import win32api
+    from windows_mcp.service.host import WindowsMCPHostService
+
+    # Resolve the Python executable that hosts this package so the service
+    # knows how to start itself.
+    python_exe = shutil.which("python") or shutil.which("python3") or "python"
+    host_module = "windows_mcp.service.host"
+
+    try:
+        win32serviceutil.InstallService(
+            pythonClassString=f"{WindowsMCPHostService.__module__}.{WindowsMCPHostService.__name__}",
+            serviceName=_SERVICE_NAME,
+            displayName=_SERVICE_DISPLAY,
+            description=WindowsMCPHostService._svc_description_,
+            startType=win32service.SERVICE_AUTO_START,
+            exeName=python_exe,
+        )
+        click.echo(f"Service '{_SERVICE_NAME}' installed.")
+    except Exception as exc:
+        # Already installed — try to update instead.
+        if "already exists" in str(exc).lower() or "1073" in str(exc):
+            click.echo(f"Service '{_SERVICE_NAME}' is already installed.")
+        else:
+            raise click.ClickException(f"Failed to install service: {exc}")
+
+    try:
+        win32serviceutil.StartService(_SERVICE_NAME)
+        click.echo(f"Service '{_SERVICE_NAME}' started.")
+    except Exception as exc:
+        raise click.ClickException(f"Failed to start service: {exc}")
+
+    click.echo("\nThe host service is now running as NT AUTHORITY\\SYSTEM.")
+    click.echo("It will restart automatically at each boot.")
+    click.echo("Run `windows-mcp service uninstall` to remove it.")
+
+
+@service.command("uninstall")
+def service_uninstall():
+    """Stop and remove the Windows MCP host service (requires elevation)."""
+    _require_win32()
+    import win32serviceutil
+    import win32service
+    import pywintypes
+
+    try:
+        win32serviceutil.StopService(_SERVICE_NAME)
+        click.echo(f"Service '{_SERVICE_NAME}' stopped.")
+    except pywintypes.error:
+        pass  # Not running — that's fine
+
+    try:
+        win32serviceutil.RemoveService(_SERVICE_NAME)
+        click.echo(f"Service '{_SERVICE_NAME}' removed.")
+    except pywintypes.error as exc:
+        raise click.ClickException(f"Failed to remove service: {exc}")
+
+
+@service.command("start")
+def service_start():
+    """Start the Windows MCP host service."""
+    _require_win32()
+    import win32serviceutil
+    try:
+        win32serviceutil.StartService(_SERVICE_NAME)
+        click.echo(f"Service '{_SERVICE_NAME}' started.")
+    except Exception as exc:
+        raise click.ClickException(f"Failed to start service: {exc}")
+
+
+@service.command("stop")
+def service_stop():
+    """Stop the Windows MCP host service."""
+    _require_win32()
+    import win32serviceutil
+    try:
+        win32serviceutil.StopService(_SERVICE_NAME)
+        click.echo(f"Service '{_SERVICE_NAME}' stopped.")
+    except Exception as exc:
+        raise click.ClickException(f"Failed to stop service: {exc}")
+
+
+@service.command("status")
+def service_status():
+    """Show the current status of the Windows MCP host service."""
+    _require_win32()
+    import win32serviceutil
+    import win32service
+    import pywintypes
+
+    try:
+        status = win32serviceutil.QueryServiceStatus(_SERVICE_NAME)
+        state = _sc_state_name(status[1])
+        click.echo(f"Service : {_SERVICE_NAME}")
+        click.echo(f"Status  : {state}")
+
+        # Also check pipe reachability from the broker side.
+        if status[1] == win32service.SERVICE_RUNNING:
+            try:
+                from windows_mcp.service.pipe import get_client
+                client = get_client()
+                client.invalidate_cache()
+                if client.is_available():
+                    desktop = client.desktop_name()
+                    click.echo(f"Pipe    : reachable")
+                    click.echo(f"Desktop : {desktop}")
+                else:
+                    click.echo("Pipe    : not reachable (service may still be starting)")
+            except Exception as exc:
+                click.echo(f"Pipe    : error — {exc}")
+    except pywintypes.error:
+        click.echo(f"Service '{_SERVICE_NAME}' is not installed.")
+
+
 if __name__ == "__main__":
     main()
