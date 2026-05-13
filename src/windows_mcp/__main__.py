@@ -787,12 +787,38 @@ def service():
 
 
 @service.command("install")
-def service_install():
+@click.option("--force", is_flag=True, help="Uninstall then reinstall if already present.")
+def service_install(force: bool):
     """Install and start the Windows MCP host service (requires elevation)."""
     _require_win32()
     import win32serviceutil
     import win32service
+    import pywintypes
     from windows_mcp.service.host import WindowsMCPHostService
+
+    # Check whether the service already exists.
+    already_installed = False
+    try:
+        win32serviceutil.QueryServiceStatus(_SERVICE_NAME)
+        already_installed = True
+    except pywintypes.error:
+        pass
+
+    if already_installed:
+        if not force:
+            click.echo(f"Service '{_SERVICE_NAME}' is already installed.")
+            click.echo("Use --force to uninstall and reinstall it.")
+            return
+        # --force: tear down the old registration first.
+        click.echo("Removing existing service registration...")
+        try:
+            win32serviceutil.StopService(_SERVICE_NAME)
+        except Exception:
+            pass
+        try:
+            win32serviceutil.RemoveService(_SERVICE_NAME)
+        except Exception as exc:
+            raise click.ClickException(f"Failed to remove existing service: {exc}")
 
     # Do NOT pass exeName here.  pywin32 ships PythonService.exe specifically
     # to act as the SCM-visible executable; it handles CoInitialize, the
@@ -806,22 +832,23 @@ def service_install():
             displayName=_SERVICE_DISPLAY,
             description=WindowsMCPHostService._svc_description_,
             startType=win32service.SERVICE_AUTO_START,
-            # userName=None → LocalSystem (the pywin32 default); SYSTEM is required
+            # userName=None → LocalSystem (pywin32 default); SYSTEM is required
             # to open the Winlogon desktop for UAC capture.
         )
-        click.echo(f"Service '{_SERVICE_NAME}' installed.")
     except Exception as exc:
-        # Already installed — try to update instead.
-        if "already exists" in str(exc).lower() or "1073" in str(exc):
-            click.echo(f"Service '{_SERVICE_NAME}' is already installed.")
-        else:
-            raise click.ClickException(f"Failed to install service: {exc}")
+        raise click.ClickException(f"Failed to install service: {exc}")
+
+    click.echo(f"Service '{_SERVICE_NAME}' installed.")
 
     try:
         win32serviceutil.StartService(_SERVICE_NAME)
         click.echo(f"Service '{_SERVICE_NAME}' started.")
-    except Exception as exc:
-        raise click.ClickException(f"Failed to start service: {exc}")
+    except pywintypes.error as exc:
+        # 1056 = service is already running
+        if exc.winerror == 1056:
+            click.echo(f"Service '{_SERVICE_NAME}' is already running.")
+        else:
+            raise click.ClickException(f"Failed to start service: {exc}")
 
     click.echo("\nThe host service is now running as NT AUTHORITY\\SYSTEM.")
     click.echo("It will restart automatically at each boot.")
