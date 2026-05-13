@@ -1,7 +1,19 @@
 from contextlib import asynccontextmanager
 from windows_mcp.config import is_debug, enable_debug
-from windows_mcp.infrastructure import AuthKeyMiddleware, is_loopback_host, IPAllowlistMiddleware, parse_ip_allowlist
+from windows_mcp.infrastructure import (
+    AuthKeyMiddleware,
+    OAuthOnlyMiddleware,
+    is_loopback_host,
+    IPAllowlistMiddleware,
+    parse_ip_allowlist,
+    discover_config_path,
+    load_config,
+    OAuthStore,
+    build_oauth_routes,
+    validate_oauth_token,
+)
 from windows_mcp.tiers import filter_tools, get_tier_labels, parse_tool_csv, resolve_enabled_tools
+from click.core import ParameterSource
 from fastmcp import FastMCP
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
@@ -36,7 +48,11 @@ def _get_analytics():
     return analytics
 
 
-def _http_middleware(auth_key: str | None = None, ip_allowlist: list | None = None) -> list:
+def _http_middleware(
+    auth_key: str | None = None,
+    ip_allowlist: list | None = None,
+    oauth_validator=None,
+) -> list:
     """Return ASGI middleware for HTTP transports including CORS and OPTIONS handling."""
     middleware = [
         Middleware(OptionsMiddleware),
@@ -45,8 +61,23 @@ def _http_middleware(auth_key: str | None = None, ip_allowlist: list | None = No
     if ip_allowlist:
         middleware.append(Middleware(IPAllowlistMiddleware, allowlist=ip_allowlist))
     if auth_key:
-        middleware.append(Middleware(AuthKeyMiddleware, auth_key=auth_key))
+        middleware.append(Middleware(AuthKeyMiddleware, auth_key=auth_key, oauth_validator=oauth_validator))
+    elif oauth_validator:
+        middleware.append(Middleware(OAuthOnlyMiddleware, oauth_validator=oauth_validator))
     return middleware
+
+
+def _param_explicit(ctx: click.Context, name: str) -> bool:
+    src = ctx.get_parameter_source(name)
+    return src in {ParameterSource.COMMANDLINE, ParameterSource.ENVIRONMENT}
+
+
+def _choose_value(ctx: click.Context, name: str, cli_value, config_value, default_value):
+    if _param_explicit(ctx, name):
+        return cli_value
+    if config_value is not None:
+        return config_value
+    return default_value
 
 
 class OptionsMiddleware:
@@ -152,6 +183,7 @@ def _run_server(
     enabled_tools: set | None = None,
     ssl_certfile: str | None = None,
     ssl_keyfile: str | None = None,
+    oauth_validator=None,
 ) -> None:
     mcp = _build_mcp()
     if enabled_tools is not None:
@@ -174,7 +206,7 @@ def _run_server(
                 host=host,
                 port=port,
                 show_banner=False,
-                middleware=_http_middleware(auth_key=auth_key, ip_allowlist=ip_allowlist),
+                middleware=_http_middleware(auth_key=auth_key, ip_allowlist=ip_allowlist, oauth_validator=oauth_validator),
                 uvicorn_config=uvicorn_config or None,
             )
         case _:
@@ -182,6 +214,7 @@ def _run_server(
 
 
 @click.command()
+@click.pass_context
 @click.option(
     "--transport",
     help="The transport layer used by the MCP server.",
@@ -210,6 +243,13 @@ def _run_server(
     is_flag=True,
     default=False,
     show_default=True,
+)
+@click.option(
+    "--config",
+    help="Path to windows-mcp config file (default: ~/.windows-mcp/config.toml).",
+    default=None,
+    type=click.Path(dir_okay=False),
+    show_default=False,
 )
 @click.option(
     "--auth-key",
@@ -267,7 +307,7 @@ def _run_server(
     help="Path to TLS certificate file (.pem) for HTTPS. Requires --ssl-keyfile.",
     default=None,
     envvar="WINDOWS_MCP_SSL_CERTFILE",
-    type=click.Path(exists=True, dir_okay=False),
+    type=str,
     show_default=False,
 )
 @click.option(
@@ -275,59 +315,130 @@ def _run_server(
     help="Path to TLS private key file (.pem) for HTTPS. Requires --ssl-certfile.",
     default=None,
     envvar="WINDOWS_MCP_SSL_KEYFILE",
-    type=click.Path(exists=True, dir_okay=False),
+    type=str,
     show_default=False,
 )
-def main(transport, host, port, debug, auth_key, allow_insecure_remote, ip_allowlist, enable_tier3, disable_tier2, tools, exclude_tools, ssl_certfile, ssl_keyfile):
+@click.option(
+    "--oauth-client-id",
+    help="OAuth client ID (pre-provisioned confidential client). Requires --oauth-client-secret.",
+    default=None,
+    envvar="WINDOWS_MCP_OAUTH_CLIENT_ID",
+    type=str,
+    show_default=False,
+)
+@click.option(
+    "--oauth-client-secret",
+    help="OAuth client secret. Requires --oauth-client-id.",
+    default=None,
+    envvar="WINDOWS_MCP_OAUTH_CLIENT_SECRET",
+    type=str,
+    show_default=False,
+)
+def main(ctx, transport, host, port, debug, config, auth_key, allow_insecure_remote, ip_allowlist, enable_tier3, disable_tier2, tools, exclude_tools, ssl_certfile, ssl_keyfile, oauth_client_id, oauth_client_secret):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     if transport == Transport.STDIO.value:
-        # stdout is a pipe in stdio mode — prevent rich from using the Win32 console API
         os.environ.setdefault("NO_COLOR", "1")
     if debug:
         enable_debug()
         logging.getLogger().setLevel(logging.DEBUG)
-        # Also set for uvicorn loggers if they exist
         for name in ["uvicorn", "uvicorn.error", "uvicorn.access", "fastmcp"]:
             logging.getLogger(name).setLevel(logging.DEBUG)
 
+    # Load config file and merge with CLI flags (CLI wins)
+    config_path = discover_config_path(config)
+    try:
+        cfg = load_config(config_path)
+    except (FileNotFoundError, ValueError) as exc:
+        raise click.ClickException(str(exc))
+
+    transport = _choose_value(ctx, "transport", transport, cfg.server.transport, "stdio")
+    host = _choose_value(ctx, "host", host, cfg.server.host, "localhost")
+    port = int(_choose_value(ctx, "port", port, cfg.server.port, 8000))
+    auth_key = _choose_value(ctx, "auth_key", auth_key, cfg.server.auth_key, None)
+    allow_insecure_remote = bool(
+        _choose_value(ctx, "allow_insecure_remote", allow_insecure_remote, cfg.server.allow_insecure_remote, False)
+    )
+    ssl_certfile = _choose_value(ctx, "ssl_certfile", ssl_certfile, cfg.server.ssl_certfile, None)
+    ssl_keyfile = _choose_value(ctx, "ssl_keyfile", ssl_keyfile, cfg.server.ssl_keyfile, None)
+    oauth_client_id = _choose_value(ctx, "oauth_client_id", oauth_client_id, cfg.security.oauth_client_id, None)
+    oauth_client_secret = _choose_value(
+        ctx, "oauth_client_secret", oauth_client_secret, cfg.security.oauth_client_secret, None
+    )
+
+    cli_tools = parse_tool_csv(tools)
+    cli_exclude = parse_tool_csv(exclude_tools) if _param_explicit(ctx, "exclude_tools") else cfg.tools.exclude
+    cli_allowlist = [e.strip() for e in ip_allowlist.split(",")] if ip_allowlist and _param_explicit(ctx, "ip_allowlist") else cfg.security.ip_allowlist
+
+    if bool(ssl_certfile) != bool(ssl_keyfile):
+        raise click.ClickException("--ssl-certfile and --ssl-keyfile must be provided together.")
+
+    if bool(oauth_client_id) != bool(oauth_client_secret):
+        raise click.ClickException("OAuth requires both --oauth-client-id and --oauth-client-secret.")
+
     parsed_allowlist = None
-    if ip_allowlist:
+    if cli_allowlist:
         try:
-            parsed_allowlist = parse_ip_allowlist([e.strip() for e in ip_allowlist.split(",")])
+            parsed_allowlist = parse_ip_allowlist(cli_allowlist)
         except ValueError as exc:
-            raise click.ClickException(f"Invalid --ip-allowlist: {exc}")
+            raise click.ClickException(f"Invalid ip_allowlist: {exc}")
 
     try:
         enabled_tools = resolve_enabled_tools(
             enable_tier3=enable_tier3,
             disable_tier2=disable_tier2,
-            explicit_tools=parse_tool_csv(tools),
-            exclude_tools=parse_tool_csv(exclude_tools),
+            explicit_tools=cli_tools,
+            exclude_tools=list(cli_exclude),
         )
     except ValueError as exc:
         raise click.ClickException(str(exc))
 
-    if bool(ssl_certfile) != bool(ssl_keyfile):
-        raise click.ClickException("--ssl-certfile and --ssl-keyfile must be provided together.")
+    configured_oauth = bool(oauth_client_id and oauth_client_secret)
 
-    if transport != Transport.STDIO.value and not is_loopback_host(host) and not auth_key and not allow_insecure_remote:
+    if (
+        transport != Transport.STDIO.value
+        and not is_loopback_host(host)
+        and not auth_key
+        and not configured_oauth
+        and not allow_insecure_remote
+    ):
         raise click.ClickException(
             f"Refusing to bind HTTP transport to '{host}' without authentication.\n"
-            "  Use --auth-key <token> to require a Bearer token on all requests.\n"
+            "  Use --auth-key <token> or --oauth-client-id/--oauth-client-secret.\n"
             "  Or pass --allow-insecure-remote to explicitly allow unauthenticated access (not recommended)."
         )
 
-    if (auth_key or ip_allowlist) and transport == Transport.STDIO.value:
+    if bool(oauth_client_id) != bool(oauth_client_secret):
+        raise click.ClickException("OAuth requires both --oauth-client-id and --oauth-client-secret.")
+
+    if (auth_key or cli_allowlist) and transport == Transport.STDIO.value:
         logger.warning("--auth-key / --ip-allowlist have no effect on stdio transport")
+
+    # Set up OAuth routes if configured (HTTP transports only)
+    oauth_validator = None
+    if configured_oauth and transport != Transport.STDIO.value:
+        mcp = _build_mcp()
+        oauth_store = OAuthStore()
+        scheme = "https" if (ssl_certfile and ssl_keyfile) else "http"
+        issuer = f"{scheme}://{host}:{port}"
+        routes = build_oauth_routes(
+            store=oauth_store,
+            issuer=issuer,
+            configured_client_id=oauth_client_id,
+            configured_client_secret=oauth_client_secret,
+        )
+        for path, (handler, methods) in routes.items():
+            mcp.custom_route(path, methods=methods)(handler)
+        oauth_validator = lambda tok: validate_oauth_token(oauth_store, tok)  # noqa: E731
 
     tiers = get_tier_labels(enabled_tools)
     scheme = "https" if ssl_certfile else "http"
     logger.debug(
-        "Starting windows-mcp (transport=%s, %s, auth=%s, ip-allowlist=%s, tiers=%s, tools=%d)",
+        "Starting windows-mcp (transport=%s, %s, auth=%s, oauth=%s, ip-allowlist=%s, tiers=%s, tools=%d)",
         transport,
         scheme,
         "on" if auth_key else "off",
-        ip_allowlist or "off",
+        "on" if configured_oauth else "off",
+        cli_allowlist or "off",
         ",".join(tiers),
         len(enabled_tools),
     )
@@ -341,6 +452,7 @@ def main(transport, host, port, debug, auth_key, allow_insecure_remote, ip_allow
             enabled_tools=enabled_tools,
             ssl_certfile=ssl_certfile,
             ssl_keyfile=ssl_keyfile,
+            oauth_validator=oauth_validator,
         )
         logger.debug("Server shut down normally")
     except Exception:

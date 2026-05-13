@@ -483,6 +483,107 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -node
 windows-mcp --ssl-certfile cert.pem --ssl-keyfile key.pem
 ```
 
+### OAuth 2.0 + PKCE
+
+For MCP clients that use OAuth (e.g. Claude Desktop) instead of a static API key:
+
+```shell
+windows-mcp --transport streamable-http --host 0.0.0.0 \
+  --ssl-certfile ~/.windows-mcp/cert.pem \
+  --ssl-keyfile  ~/.windows-mcp/key.pem \
+  --oauth-client-id my-client \
+  --oauth-client-secret my-secret
+```
+
+**Claude Desktop config:**
+```json
+{
+  "mcpServers": {
+    "windows-mcp": {
+      "type": "http",
+      "url": "https://<host>:8000/mcp/",
+      "oauth": {
+        "clientId": "my-client",
+        "clientSecret": "my-secret"
+      }
+    }
+  }
+}
+```
+
+The OAuth server exposes:
+- `GET /.well-known/oauth-authorization-server` — server metadata (RFC 8414)
+- `GET /oauth/authorize` — Authorization Code + PKCE (`S256` required)
+- `POST /oauth/token` — token exchange (client secret required)
+- `POST /oauth/register` — disabled; clients must be pre-provisioned
+
+Dynamic client registration is disabled. Redirect URIs must be loopback `http(s)` only.
+Auth key and OAuth can coexist — both are accepted as valid Bearer tokens.
+
+### Config File (`~/.windows-mcp/config.toml`)
+
+Instead of passing flags every time, store your configuration in `~/.windows-mcp/config.toml`. CLI flags always override config file values.
+
+**Search order:**
+1. `--config /path/to/config.toml`
+2. `~/.windows-mcp/config.toml`
+
+**stdio** — local only, no security needed:
+```toml
+[server]
+transport = "stdio"
+```
+
+**SSE** — network access with auth and IP restriction:
+```toml
+[server]
+transport = "sse"
+host      = "0.0.0.0"
+port      = 8000
+auth_key  = "your-secret-key"
+
+[security]
+ip_allowlist = ["192.168.1.0/24"]
+```
+
+**Streamable HTTP** — with auth, TLS, and tool exclusions:
+```toml
+[server]
+transport    = "streamable-http"
+host         = "0.0.0.0"
+port         = 8000
+auth_key     = "your-secret-key"
+ssl_certfile = "cert.pem"   # resolved relative to ~/.windows-mcp/
+ssl_keyfile  = "key.pem"
+
+[security]
+ip_allowlist        = ["192.168.1.0/24"]
+oauth_client_id     = "my-client"      # optional — enables OAuth 2.0 + PKCE
+oauth_client_secret = "my-secret"
+
+[tools]
+exclude = ["PowerShell", "Registry"]   # disable specific tools
+```
+
+Place cert and key files in the same directory:
+
+```
+~/.windows-mcp/
+├── config.toml
+├── cert.pem
+└── key.pem
+```
+
+Generate a self-signed cert directly into that directory:
+
+```shell
+mkdir -p ~/.windows-mcp
+openssl req -x509 -newkey rsa:4096 \
+  -keyout ~/.windows-mcp/key.pem \
+  -out ~/.windows-mcp/cert.pem \
+  -days 365 -nodes
+```
+
 ### SSRF Protection
 `Scrape` tool blocks: private IPs, loopback, link-local, credentials-in-URLs, non-HTTP schemes.
 
