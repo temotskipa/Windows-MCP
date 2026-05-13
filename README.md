@@ -76,6 +76,30 @@ mcp-name: io.github.CursorTouch/Windows-MCP
 - Python 3.13+
 - UV (Package Manager) from Astra, install with `pip install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`
 - `English` as the default language in Windows preferred else disable the `App-Tool` in the MCP Server for Windows with other languages.
+
+### Run at Login
+
+Run the server directly when needed:
+
+```shell
+uvx windows-mcp
+uvx windows-mcp --transport sse --host localhost --port 8000
+uvx windows-mcp --transport streamable-http --host localhost --port 8000
+```
+
+Install it as a background task that starts now and at every login:
+
+```shell
+windows-mcp install
+
+# Or choose the HTTP transport and bind address explicitly
+windows-mcp install --transport sse --host 127.0.0.1 --port 8000
+```
+
+This creates a per-user Scheduled Task named `windows-mcp-server` and a wrapper script at
+`~/.windows-mcp/start-server.cmd`. Use `windows-mcp uninstall` to remove it. Logs are written
+to `~/.windows-mcp/server.log` and `~/.windows-mcp/server.error.log`.
+
 <details>
   <summary>Install in Claude Desktop</summary>
 
