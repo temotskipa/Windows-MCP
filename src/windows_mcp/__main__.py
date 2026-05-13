@@ -12,7 +12,6 @@ from windows_mcp.infrastructure import (
     build_oauth_routes,
     validate_oauth_token,
 )
-from windows_mcp.tiers import filter_tools, get_tier_labels, parse_tool_csv, resolve_enabled_tools
 from click.core import ParameterSource
 from fastmcp import FastMCP
 from starlette.middleware import Middleware
@@ -174,25 +173,54 @@ class Transport(Enum):
         return self.value
 
 
+def _apply_tool_filter(mcp, explicit_tools: list[str] | None, exclude_tools: list[str] | None) -> None:
+    """Remove disabled tools from the MCP registry."""
+    tool_mgr = getattr(mcp, "_tool_manager", None)
+    tools_dict = getattr(tool_mgr, "_tools", None)
+    if tools_dict is None:
+        provider = getattr(mcp, "_local_provider", None)
+        components = getattr(provider, "_components", {})
+        tools_dict = {
+            (getattr(v, "name", None) or k.split(":", 1)[1].split("@", 1)[0]): k
+            for k, v in components.items()
+            if isinstance(k, str) and k.startswith("tool:")
+        }
+        def _remove(name):
+            keys = [k for k, v in components.items() if isinstance(k, str) and k.startswith("tool:") and (getattr(components[k], "name", None) == name or k.split(":", 1)[1].split("@", 1)[0] == name)]
+            for k in keys:
+                components.pop(k, None)
+        registered = set(tools_dict.keys())
+    else:
+        def _remove(name):
+            tools_dict.pop(name, None)
+        registered = set(tools_dict.keys())
+
+    if explicit_tools:
+        keep = {t for t in explicit_tools if t in registered}
+        for name in registered - keep:
+            _remove(name)
+    elif exclude_tools:
+        for name in exclude_tools:
+            if name in registered:
+                _remove(name)
+    logger.debug("Tool filter applied: explicit=%s exclude=%s", explicit_tools, exclude_tools)
+
+
 def _run_server(
     transport: str,
     host: str,
     port: int,
     auth_key: str | None = None,
     ip_allowlist: list | None = None,
-    enabled_tools: set | None = None,
+    explicit_tools: list[str] | None = None,
+    exclude_tools: list[str] | None = None,
     ssl_certfile: str | None = None,
     ssl_keyfile: str | None = None,
     oauth_validator=None,
 ) -> None:
     mcp = _build_mcp()
-    if enabled_tools is not None:
-        counts = filter_tools(mcp, enabled_tools)
-        tiers = get_tier_labels(enabled_tools)
-        logger.debug(
-            "Tool filter applied: %d/%d enabled (tiers: %s)",
-            counts["enabled"], counts["total"], ",".join(tiers) or "none",
-        )
+    if explicit_tools or exclude_tools:
+        _apply_tool_filter(mcp, explicit_tools, exclude_tools)
     match transport:
         case Transport.STDIO.value:
             mcp.run(transport=Transport.STDIO.value, show_banner=False)
@@ -206,7 +234,11 @@ def _run_server(
                 host=host,
                 port=port,
                 show_banner=False,
-                middleware=_http_middleware(auth_key=auth_key, ip_allowlist=ip_allowlist, oauth_validator=oauth_validator),
+                middleware=_http_middleware(
+                    auth_key=auth_key,
+                    ip_allowlist=ip_allowlist,
+                    oauth_validator=oauth_validator,
+                ),
                 uvicorn_config=uvicorn_config or None,
             )
         case _:
@@ -275,20 +307,8 @@ def _run_server(
     show_default=False,
 )
 @click.option(
-    "--enable-tier3",
-    help="Enable Tier 3 high-risk tools: App, PowerShell, FileSystem, Registry, Process.",
-    is_flag=True,
-    default=False,
-)
-@click.option(
-    "--disable-tier2",
-    help="Disable Tier 2 interactive tools, leaving only read-only Tier 1 tools active.",
-    is_flag=True,
-    default=False,
-)
-@click.option(
     "--tools",
-    help="Comma-separated explicit list of tools to enable, overrides tier settings (e.g. 'Screenshot,Click,Snapshot').",
+    help="Comma-separated explicit list of tools to enable (e.g. 'Screenshot,Click,Snapshot'). Overrides --exclude-tools.",
     default=None,
     envvar="WINDOWS_MCP_TOOLS",
     type=str,
@@ -334,7 +354,7 @@ def _run_server(
     type=str,
     show_default=False,
 )
-def main(ctx, transport, host, port, debug, config, auth_key, allow_insecure_remote, ip_allowlist, enable_tier3, disable_tier2, tools, exclude_tools, ssl_certfile, ssl_keyfile, oauth_client_id, oauth_client_secret):
+def main(ctx, transport, host, port, debug, config, auth_key, allow_insecure_remote, ip_allowlist, tools, exclude_tools, ssl_certfile, ssl_keyfile, oauth_client_id, oauth_client_secret):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     if transport == Transport.STDIO.value:
         os.environ.setdefault("NO_COLOR", "1")
@@ -365,8 +385,8 @@ def main(ctx, transport, host, port, debug, config, auth_key, allow_insecure_rem
         ctx, "oauth_client_secret", oauth_client_secret, cfg.security.oauth_client_secret, None
     )
 
-    cli_tools = parse_tool_csv(tools)
-    cli_exclude = parse_tool_csv(exclude_tools) if _param_explicit(ctx, "exclude_tools") else cfg.tools.exclude
+    cli_tools = [t.strip() for t in tools.split(",") if t.strip()] if tools else []
+    cli_exclude = [t.strip() for t in exclude_tools.split(",") if t.strip()] if _param_explicit(ctx, "exclude_tools") and exclude_tools else list(cfg.tools.exclude)
     cli_allowlist = [e.strip() for e in ip_allowlist.split(",")] if ip_allowlist and _param_explicit(ctx, "ip_allowlist") else cfg.security.ip_allowlist
 
     if bool(ssl_certfile) != bool(ssl_keyfile):
@@ -382,16 +402,6 @@ def main(ctx, transport, host, port, debug, config, auth_key, allow_insecure_rem
         except ValueError as exc:
             raise click.ClickException(f"Invalid ip_allowlist: {exc}")
 
-    try:
-        enabled_tools = resolve_enabled_tools(
-            enable_tier3=enable_tier3,
-            disable_tier2=disable_tier2,
-            explicit_tools=cli_tools,
-            exclude_tools=list(cli_exclude),
-        )
-    except ValueError as exc:
-        raise click.ClickException(str(exc))
-
     configured_oauth = bool(oauth_client_id and oauth_client_secret)
 
     if (
@@ -406,9 +416,6 @@ def main(ctx, transport, host, port, debug, config, auth_key, allow_insecure_rem
             "  Use --auth-key <token> or --oauth-client-id/--oauth-client-secret.\n"
             "  Or pass --allow-insecure-remote to explicitly allow unauthenticated access (not recommended)."
         )
-
-    if bool(oauth_client_id) != bool(oauth_client_secret):
-        raise click.ClickException("OAuth requires both --oauth-client-id and --oauth-client-secret.")
 
     if (auth_key or cli_allowlist) and transport == Transport.STDIO.value:
         logger.warning("--auth-key / --ip-allowlist have no effect on stdio transport")
@@ -430,17 +437,16 @@ def main(ctx, transport, host, port, debug, config, auth_key, allow_insecure_rem
             mcp.custom_route(path, methods=methods)(handler)
         oauth_validator = lambda tok: validate_oauth_token(oauth_store, tok)  # noqa: E731
 
-    tiers = get_tier_labels(enabled_tools)
     scheme = "https" if ssl_certfile else "http"
     logger.debug(
-        "Starting windows-mcp (transport=%s, %s, auth=%s, oauth=%s, ip-allowlist=%s, tiers=%s, tools=%d)",
+        "Starting windows-mcp (transport=%s, %s, auth=%s, oauth=%s, ip-allowlist=%s, tools=%s, exclude=%s)",
         transport,
         scheme,
         "on" if auth_key else "off",
         "on" if configured_oauth else "off",
         cli_allowlist or "off",
-        ",".join(tiers),
-        len(enabled_tools),
+        cli_tools or "all",
+        cli_exclude or "none",
     )
     try:
         _run_server(
@@ -449,7 +455,8 @@ def main(ctx, transport, host, port, debug, config, auth_key, allow_insecure_rem
             port=port,
             auth_key=auth_key,
             ip_allowlist=parsed_allowlist,
-            enabled_tools=enabled_tools,
+            explicit_tools=cli_tools or None,
+            exclude_tools=cli_exclude or None,
             ssl_certfile=ssl_certfile,
             ssl_keyfile=ssl_keyfile,
             oauth_validator=oauth_validator,
