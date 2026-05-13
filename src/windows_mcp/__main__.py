@@ -806,7 +806,8 @@ def service_install():
             displayName=_SERVICE_DISPLAY,
             description=WindowsMCPHostService._svc_description_,
             startType=win32service.SERVICE_AUTO_START,
-            startAccountName="LocalSystem",  # must be SYSTEM to reach Winlogon desktop
+            # userName=None → LocalSystem (the pywin32 default); SYSTEM is required
+            # to open the Winlogon desktop for UAC capture.
         )
         click.echo(f"Service '{_SERVICE_NAME}' installed.")
     except Exception as exc:
