@@ -26,6 +26,7 @@ import ctypes
 import ctypes.wintypes
 import io
 import logging
+import threading
 from contextlib import contextmanager
 from typing import Any
 
@@ -94,10 +95,43 @@ def _input_desktop():
             _user32.CloseWindowStation(hwinsta)
 
 
+def _run_on_fresh_thread(fn, timeout: float = 15.0) -> Any:
+    """Run *fn* on a brand-new thread and return its result (or re-raise its exception).
+
+    IUIAutomation must be created AFTER SetThreadDesktop is called, and COM
+    must be initialized AFTER IUIAutomation is created — so both steps must
+    happen on the same thread in the right order.  The long-lived pipe-server
+    thread has its COM apartment already set up (for the wrong desktop), so
+    creating IUIAutomation there silently binds it to Session 0's default
+    desktop instead of the Winlogon desktop.
+
+    Spawning a fresh thread guarantees:
+      1. No prior COM initialization on this thread.
+      2. _input_desktop() calls SetThreadDesktop before anything else.
+      3. CoInitialize runs in the correct desktop context.
+      4. CoUninitialize cleans up on thread exit.
+    """
+    result: list[Any] = []
+    exc: list[BaseException] = []
+
+    def _wrapper():
+        try:
+            result.append(fn())
+        except Exception as e:
+            exc.append(e)
+
+    t = threading.Thread(target=_wrapper, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if exc:
+        raise exc[0]
+    return result[0] if result else None
+
+
 def _create_uia() -> tuple[Any, Any]:
-    """Return (IUIAutomation, uia_core) on the current thread desktop."""
+    """Return (IUIAutomation, uia_core) — must be called on a thread with no prior COM init."""
     import comtypes.client
-    ctypes.windll.ole32.CoInitializeEx(None, 0)  # safe to call multiple times
+    ctypes.windll.ole32.CoInitialize(None)  # STA — matches the existing user-mode UIA code
     uia_core = comtypes.client.GetModule("UIAutomationCore.dll")
     iuia = comtypes.client.CreateObject(
         "{ff48dba4-60ef-4201-aa87-54103eef594e}",
@@ -187,9 +221,9 @@ def capture_screenshot() -> bytes:
 
 def uia_get_window_titles() -> list[str]:
     """Return names of top-level windows on the current input desktop."""
-    titles: list[str] = []
-    with _input_desktop():
-        try:
+    def _work() -> list[str]:
+        titles: list[str] = []
+        with _input_desktop():
             iuia, _ = _create_uia()
             root = iuia.GetRootElement()
             walker = iuia.RawViewWalker
@@ -205,9 +239,13 @@ def uia_get_window_titles() -> list[str]:
                     child = walker.GetNextSiblingElement(child)
                 except Exception:
                     break
-        except Exception as exc:
-            logger.warning("uia_get_window_titles failed: %s", exc)
-    return titles
+            return titles
+
+    try:
+        return _run_on_fresh_thread(_work) or []
+    except Exception as exc:
+        logger.warning("uia_get_window_titles failed: %s", exc)
+        return []
 
 
 def uia_get_tree() -> list[dict]:
@@ -217,10 +255,13 @@ def uia_get_tree() -> list[dict]:
     ``can_invoke=True`` support ``IUIAutomationInvokePattern`` — the broker uses
     this to identify clickable buttons (Yes/No on a UAC dialog) without
     re-walking the tree.
+
+    Runs on a fresh thread so COM initialises *after* SetThreadDesktop, binding
+    IUIAutomation to the correct desktop (Winlogon during UAC).
     """
-    nodes: list[dict] = []
-    with _input_desktop():
-        try:
+    def _work() -> list[dict]:
+        nodes: list[dict] = []
+        with _input_desktop():
             iuia, _ = _create_uia()
             root = iuia.GetRootElement()
             walker = iuia.RawViewWalker
@@ -233,20 +274,24 @@ def uia_get_tree() -> list[dict]:
                     child = walker.GetNextSiblingElement(child)
                 except Exception:
                     break
-        except Exception as exc:
-            logger.error("uia_get_tree failed: %s", exc)
-    return nodes
+        return nodes
+
+    try:
+        return _run_on_fresh_thread(_work) or []
+    except Exception as exc:
+        logger.error("uia_get_tree failed: %s", exc)
+        return []
 
 
 def uia_invoke_element(name: str) -> bool:
     """Find a named element on the input desktop and invoke it via UIA.
 
-    Uses ``IUIAutomation.FindFirst`` with a name condition, then calls
-    ``IUIAutomationInvokePattern.Invoke()``.  This is a direct COM call —
-    no input injection needed, works from Session 0.
+    Uses ``IUIAutomation.FindFirst`` + ``IUIAutomationInvokePattern.Invoke()``.
+    Direct COM call — no input injection needed, works from Session 0.
+    Runs on a fresh thread so COM binds to the Winlogon desktop.
     """
-    with _input_desktop():
-        try:
+    def _work() -> bool:
+        with _input_desktop():
             iuia, uia_core = _create_uia()
             root = iuia.GetRootElement()
             condition = iuia.CreatePropertyCondition(_UIA_NamePropertyId, name)
@@ -262,24 +307,25 @@ def uia_invoke_element(name: str) -> bool:
             invoke.Invoke()
             logger.info("uia_invoke_element: invoked %r", name)
             return True
-        except Exception as exc:
-            logger.error("uia_invoke_element(%r) failed: %s", name, exc)
-            return False
+
+    try:
+        return _run_on_fresh_thread(_work) or False
+    except Exception as exc:
+        logger.error("uia_invoke_element(%r) failed: %s", name, exc)
+        return False
 
 
 def uia_click_at(x: int, y: int) -> bool:
-    """Invoke the UIA element at screen coordinates (x, y) on the input desktop.
+    """Invoke the element at (x, y) on the input desktop via UIA ElementFromPoint.
 
-    Uses ``IUIAutomation.ElementFromPoint`` so callers can use coordinates from
-    the screenshot directly.  Falls back gracefully if no invokable element is
-    found at the given point.
+    Callers can pass coordinates straight from the screenshot.  Runs on a fresh
+    thread so COM binds to the correct (Winlogon) desktop.
     """
-
     class _POINT(ctypes.Structure):
         _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
-    with _input_desktop():
-        try:
+    def _work() -> bool:
+        with _input_desktop():
             iuia, uia_core = _create_uia()
             element = iuia.ElementFromPoint(_POINT(x, y))
             if element is None:
@@ -293,6 +339,9 @@ def uia_click_at(x: int, y: int) -> bool:
             invoke.Invoke()
             logger.info("uia_click_at(%d,%d): invoked %r", x, y, element.CurrentName)
             return True
-        except Exception as exc:
-            logger.error("uia_click_at(%d,%d) failed: %s", x, y, exc)
-            return False
+
+    try:
+        return _run_on_fresh_thread(_work) or False
+    except Exception as exc:
+        logger.error("uia_click_at(%d,%d) failed: %s", x, y, exc)
+        return False
