@@ -57,12 +57,26 @@ def _http_middleware(
     auth_key: str | None = None,
     ip_allowlist: list | None = None,
     oauth_validator=None,
+    cors_origins: list[str] | None = None,
+    allowed_hosts: list[str] | None = None,
 ) -> list:
-    """Return ASGI middleware for HTTP transports including CORS and OPTIONS handling."""
-    middleware = [
-        Middleware(OptionsMiddleware),
-        Middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]),
+    """Return ASGI middleware for HTTP transports."""
+    middleware: list = [
+        Middleware(OptionsMiddleware, allowed_origins=cors_origins or []),
     ]
+    if allowed_hosts:
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+        middleware.append(Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts))
+    if cors_origins:
+        middleware.append(
+            Middleware(
+                CORSMiddleware,
+                allow_origins=cors_origins,
+                allow_methods=["GET", "POST", "OPTIONS"],
+                allow_headers=["Content-Type", "Authorization", "Mcp-Session-Id"],
+                allow_credentials=False,
+            )
+        )
     if ip_allowlist:
         middleware.append(Middleware(IPAllowlistMiddleware, allowlist=ip_allowlist))
     if auth_key:
@@ -86,31 +100,34 @@ def _choose_value(ctx: click.Context, name: str, cli_value, config_value, defaul
 
 
 class OptionsMiddleware:
-    """ASGI middleware that intercepts OPTIONS requests and returns 200 OK."""
+    """ASGI middleware that intercepts OPTIONS preflight requests.
 
-    def __init__(self, app: Any) -> None:
+    Only echoes CORS headers when the request Origin is in the explicit allowlist.
+    With an empty allowlist (default), returns 200 OK with no CORS headers so that
+    browsers block cross-origin access via Same-Origin Policy.
+    """
+
+    def __init__(self, app: Any, *, allowed_origins: list[str] | None = None) -> None:
         self.app = app
+        self._allowed: frozenset[str] = frozenset(allowed_origins or [])
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] == "http" and scope["method"] == "OPTIONS":
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 200,
-                    "headers": [
-                        [b"content-length", b"0"],
-                        [b"access-control-allow-origin", b"*"],
-                        [b"access-control-allow-methods", b"*"],
-                        [b"access-control-allow-headers", b"*"],
-                    ],
-                }
-            )
-            await send(
-                {
-                    "type": "http.response.body",
-                    "body": b"",
-                }
-            )
+            headers: list[list[bytes]] = [[b"content-length", b"0"]]
+            if self._allowed:
+                origin = next(
+                    (v.decode("latin-1") for k, v in scope.get("headers", []) if k == b"origin"),
+                    None,
+                )
+                if origin and origin in self._allowed:
+                    headers += [
+                        [b"access-control-allow-origin", origin.encode("latin-1")],
+                        [b"access-control-allow-methods", b"GET, POST, OPTIONS"],
+                        [b"access-control-allow-headers", b"content-type, authorization, mcp-session-id"],
+                        [b"vary", b"Origin"],
+                    ]
+            await send({"type": "http.response.start", "status": 200, "headers": headers})
+            await send({"type": "http.response.body", "body": b""})
         else:
             await self.app(scope, receive, send)
 
@@ -223,6 +240,8 @@ def _run_server(
     ssl_certfile: str | None = None,
     ssl_keyfile: str | None = None,
     oauth_validator=None,
+    cors_origins: list[str] | None = None,
+    allowed_hosts: list[str] | None = None,
 ) -> None:
     mcp = _build_mcp()
     if explicit_tools or exclude_tools:
@@ -244,6 +263,8 @@ def _run_server(
                     auth_key=auth_key,
                     ip_allowlist=ip_allowlist,
                     oauth_validator=oauth_validator,
+                    cors_origins=cors_origins,
+                    allowed_hosts=allowed_hosts,
                 ),
                 uvicorn_config=uvicorn_config or None,
             )
@@ -334,6 +355,14 @@ def main():
     show_default=False,
 )
 @click.option(
+    "--cors-origins",
+    help="Comma-separated list of allowed CORS origins (e.g. 'https://my-client.example.com'). Defaults to none — no CORS headers are emitted, so browsers block cross-origin requests via Same-Origin Policy.",
+    default=None,
+    envvar="WINDOWS_MCP_CORS_ORIGINS",
+    type=str,
+    show_default=False,
+)
+@click.option(
     "--ssl-certfile",
     help="Path to TLS certificate file (.pem) for HTTPS. Requires --ssl-keyfile.",
     default=None,
@@ -365,7 +394,7 @@ def main():
     type=str,
     show_default=False,
 )
-def serve(ctx, transport, host, port, debug, config, auth_key, allow_insecure_remote, ip_allowlist, tools, exclude_tools, ssl_certfile, ssl_keyfile, oauth_client_id, oauth_client_secret):
+def serve(ctx, transport, host, port, debug, config, auth_key, allow_insecure_remote, ip_allowlist, tools, exclude_tools, cors_origins, ssl_certfile, ssl_keyfile, oauth_client_id, oauth_client_secret):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     if transport == Transport.STDIO.value:
         os.environ.setdefault("NO_COLOR", "1")
@@ -399,6 +428,7 @@ def serve(ctx, transport, host, port, debug, config, auth_key, allow_insecure_re
     cli_tools = [t.strip() for t in tools.split(",") if t.strip()] if tools else []
     cli_exclude = [t.strip() for t in exclude_tools.split(",") if t.strip()] if _param_explicit(ctx, "exclude_tools") and exclude_tools else list(cfg.tools.exclude)
     cli_allowlist = [e.strip() for e in ip_allowlist.split(",")] if ip_allowlist and _param_explicit(ctx, "ip_allowlist") else cfg.security.ip_allowlist
+    cli_cors = [o.strip() for o in cors_origins.split(",") if o.strip()] if cors_origins and _param_explicit(ctx, "cors_origins") else list(cfg.security.cors_origins)
 
     if bool(ssl_certfile) != bool(ssl_keyfile):
         raise click.ClickException("--ssl-certfile and --ssl-keyfile must be provided together.")
@@ -431,6 +461,19 @@ def serve(ctx, transport, host, port, debug, config, auth_key, allow_insecure_re
     if (auth_key or cli_allowlist) and transport == Transport.STDIO.value:
         logger.warning("--auth-key / --ip-allowlist have no effect on stdio transport")
 
+    # DNS rebinding protection: validate Host header against the bind address.
+    # Applied automatically for loopback binds; skipped for 0.0.0.0/:: (too broad)
+    # and when allow_insecure_remote is set.
+    if transport != Transport.STDIO.value and not allow_insecure_remote:
+        if is_loopback_host(host):
+            computed_allowed_hosts: list[str] | None = ["localhost", "127.0.0.1", "[::1]"]
+        elif host not in ("0.0.0.0", "::", ""):
+            computed_allowed_hosts = [host]
+        else:
+            computed_allowed_hosts = None
+    else:
+        computed_allowed_hosts = None
+
     # Set up OAuth routes if configured (HTTP transports only)
     oauth_validator = None
     if configured_oauth and transport != Transport.STDIO.value:
@@ -450,12 +493,13 @@ def serve(ctx, transport, host, port, debug, config, auth_key, allow_insecure_re
 
     scheme = "https" if ssl_certfile else "http"
     logger.debug(
-        "Starting windows-mcp (transport=%s, %s, auth=%s, oauth=%s, ip-allowlist=%s, tools=%s, exclude=%s)",
+        "Starting windows-mcp (transport=%s, %s, auth=%s, oauth=%s, ip-allowlist=%s, cors=%s, tools=%s, exclude=%s)",
         transport,
         scheme,
         "on" if auth_key else "off",
         "on" if configured_oauth else "off",
         cli_allowlist or "off",
+        cli_cors or "off",
         cli_tools or "all",
         cli_exclude or "none",
     )
@@ -471,6 +515,8 @@ def serve(ctx, transport, host, port, debug, config, auth_key, allow_insecure_re
             ssl_certfile=ssl_certfile,
             ssl_keyfile=ssl_keyfile,
             oauth_validator=oauth_validator,
+            cors_origins=cli_cors or None,
+            allowed_hosts=computed_allowed_hosts,
         )
         logger.debug("Server shut down normally")
     except Exception:

@@ -485,6 +485,18 @@ windows-mcp --auth-key "token" --ip-allowlist "203.0.113.0/24,198.51.100.5"
 ```
 Restricts connections to specified CIDR ranges. Blocks private/loopback IPs by default.
 
+### CORS Origins
+
+By default, **no CORS headers are emitted**. Browsers block cross-origin requests via their own Same-Origin Policy, which means arbitrary websites cannot reach the MCP control plane even if the server is on `localhost`. Host-header validation (DNS rebinding protection) is also applied automatically based on the bind address.
+
+If you need a browser-based MCP client to reach the server, opt in with an explicit origin allowlist:
+
+```shell
+windows-mcp --cors-origins "https://my-client.example.com,https://other.example.com"
+```
+
+Only the listed origins receive `Access-Control-Allow-Origin` headers; all other cross-origin requests are rejected by the browser. The equivalent environment variable is `WINDOWS_MCP_CORS_ORIGINS`.
+
 ### Tool Selection
 All tools are enabled by default. Use `--tools` to whitelist specific tools, or `--exclude-tools` to block specific ones.
 
@@ -575,6 +587,7 @@ ssl_keyfile  = "key.pem"
 
 [security]
 ip_allowlist        = ["192.168.1.0/24"]
+cors_origins        = ["https://my-client.example.com"]   # optional — browser CORS opt-in
 oauth_client_id     = "my-client"      # optional — enables OAuth 2.0 + PKCE
 oauth_client_secret = "my-secret"
 
@@ -624,6 +637,7 @@ All variables are optional unless noted. Set them via the `env` key in `claude_d
 |---|---|---|
 | `WINDOWS_MCP_AUTH_KEY` | _(none)_ | Bearer token required on all HTTP requests. Alternative to `--auth-key` CLI flag. |
 | `WINDOWS_MCP_IP_ALLOWLIST` | _(none)_ | Comma-separated list of allowed client IPs or CIDR ranges (e.g., `203.0.113.0/24,198.51.100.5`). Alternative to `--ip-allowlist` CLI flag. |
+| `WINDOWS_MCP_CORS_ORIGINS` | _(none)_ | Comma-separated list of origins permitted to make cross-origin browser requests (e.g., `https://my-client.example.com`). No CORS headers are emitted when unset. Alternative to `--cors-origins` CLI flag. |
 | `WINDOWS_MCP_TOOLS` | _(all enabled)_ | Comma-separated explicit list of tools to enable (e.g., `Screenshot,Click,Snapshot`). Alternative to `--tools` CLI flag. |
 | `WINDOWS_MCP_EXCLUDE_TOOLS` | _(none)_ | Comma-separated list of tools to disable (e.g., `PowerShell,Registry`). Alternative to `--exclude-tools` CLI flag. |
 | `WINDOWS_MCP_SSL_CERTFILE` | _(none)_ | Path to TLS certificate file (.pem) for HTTPS. Must be provided with `WINDOWS_MCP_SSL_KEYFILE`. |

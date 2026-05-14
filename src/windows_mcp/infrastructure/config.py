@@ -21,6 +21,7 @@ class ServerConfig:
 @dataclass
 class SecurityConfig:
     ip_allowlist: list[str] = field(default_factory=list)
+    cors_origins: list[str] = field(default_factory=list)
     oauth_client_id: str | None = None
     oauth_client_secret: str | None = None
 
@@ -109,6 +110,8 @@ def load_config(path: Path | None) -> WindowsMCPConfig:
 
     if "ip_allowlist" in security:
         cfg.security.ip_allowlist = _list_of_strings(security["ip_allowlist"], "security.ip_allowlist")
+    if "cors_origins" in security:
+        cfg.security.cors_origins = _list_of_strings(security["cors_origins"], "security.cors_origins")
     if "oauth_client_id" in security:
         cfg.security.oauth_client_id = str(security["oauth_client_id"]) or None
     if "oauth_client_secret" in security:
@@ -149,6 +152,9 @@ def write_config(cfg: WindowsMCPConfig, path: Path) -> None:
     if sec.ip_allowlist:
         items = ', '.join(f'"{ip}"' for ip in sec.ip_allowlist)
         sec_lines.append(f'ip_allowlist = [{items}]')
+    if sec.cors_origins:
+        items = ', '.join(f'"{o}"' for o in sec.cors_origins)
+        sec_lines.append(f'cors_origins = [{items}]')
     if sec.oauth_client_id:
         sec_lines.append(f'oauth_client_id = "{sec.oauth_client_id}"')
     if sec.oauth_client_secret:
