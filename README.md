@@ -435,7 +435,7 @@ See [🔐 Security & Access Control](#-security--access-control) for all options
 
 ### Transport Options
 
-| Transport | Flag | Use Case |
+| Transport | Command | Use Case |
 |---|---|---|
 | `stdio` (default) | `serve --transport stdio` | Direct connection from MCP clients like Claude Desktop, Cursor, etc. |
 | `sse` | `serve --transport sse --host HOST --port PORT` | Network-accessible via Server-Sent Events |

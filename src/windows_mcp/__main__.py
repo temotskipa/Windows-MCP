@@ -25,6 +25,7 @@ from enum import Enum
 from typing import Any
 import logging
 import asyncio
+import shlex
 import secrets
 import subprocess
 import click
@@ -66,6 +67,7 @@ def _http_middleware(
     ]
     if allowed_hosts:
         from starlette.middleware.trustedhost import TrustedHostMiddleware
+
         middleware.append(Middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts))
     if cors_origins:
         middleware.append(
@@ -80,7 +82,9 @@ def _http_middleware(
     if ip_allowlist:
         middleware.append(Middleware(IPAllowlistMiddleware, allowlist=ip_allowlist))
     if auth_key:
-        middleware.append(Middleware(AuthKeyMiddleware, auth_key=auth_key, oauth_validator=oauth_validator))
+        middleware.append(
+            Middleware(AuthKeyMiddleware, auth_key=auth_key, oauth_validator=oauth_validator)
+        )
     elif oauth_validator:
         middleware.append(Middleware(OAuthOnlyMiddleware, oauth_validator=oauth_validator))
     return middleware
@@ -123,7 +127,10 @@ class OptionsMiddleware:
                     headers += [
                         [b"access-control-allow-origin", origin.encode("latin-1")],
                         [b"access-control-allow-methods", b"GET, POST, OPTIONS"],
-                        [b"access-control-allow-headers", b"content-type, authorization, mcp-session-id"],
+                        [
+                            b"access-control-allow-headers",
+                            b"content-type, authorization, mcp-session-id",
+                        ],
                         [b"vary", b"Origin"],
                     ]
             await send({"type": "http.response.start", "status": 200, "headers": headers})
@@ -185,8 +192,6 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-
-
 class Transport(Enum):
     STDIO = "stdio"
     SSE = "sse"
@@ -196,7 +201,55 @@ class Transport(Enum):
         return self.value
 
 
-def _apply_tool_filter(mcp, explicit_tools: list[str] | None, exclude_tools: list[str] | None) -> None:
+_LEGACY_SERVE_FLAGS = {
+    "--transport",
+    "--host",
+    "--port",
+    "--auth-key",
+    "--stateless-http",
+    "--ip-allowlist",
+    "--cors-origins",
+    "--ssl-certfile",
+    "--ssl-keyfile",
+    "--oauth-client-id",
+    "--oauth-client-secret",
+    "--tools",
+    "--exclude-tools",
+    "--allow-insecure-remote",
+    "--debug",
+}
+
+
+class _LegacyAwareGroup(click.Group):
+    """Detect serve flags passed to the top-level command group."""
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        legacy_arg = self._first_legacy_arg_before_subcommand(args)
+        if legacy_arg:
+            suggested = shlex.join(["windows-mcp", "serve", *args])
+            raise click.UsageError(
+                "`windows-mcp` is now a command group. Did you mean:\n"
+                f"    {suggested}\n"
+                "These flags belong on the `serve` subcommand. "
+                "See `windows-mcp serve --help`.",
+                ctx=ctx,
+            )
+        return super().parse_args(ctx, args)
+
+    def _first_legacy_arg_before_subcommand(self, args: list[str]) -> str | None:
+        commands = set(self.commands)
+        for arg in args:
+            if arg in commands:
+                return None
+            flag = arg.split("=", 1)[0]
+            if flag in _LEGACY_SERVE_FLAGS:
+                return arg
+        return None
+
+
+def _apply_tool_filter(
+    mcp, explicit_tools: list[str] | None, exclude_tools: list[str] | None
+) -> None:
     """Remove disabled tools from the MCP registry."""
     tool_mgr = getattr(mcp, "_tool_manager", None)
     tools_dict = getattr(tool_mgr, "_tools", None)
@@ -208,14 +261,27 @@ def _apply_tool_filter(mcp, explicit_tools: list[str] | None, exclude_tools: lis
             for k, v in components.items()
             if isinstance(k, str) and k.startswith("tool:")
         }
+
         def _remove(name):
-            keys = [k for k, v in components.items() if isinstance(k, str) and k.startswith("tool:") and (getattr(components[k], "name", None) == name or k.split(":", 1)[1].split("@", 1)[0] == name)]
+            keys = [
+                k
+                for k, v in components.items()
+                if isinstance(k, str)
+                and k.startswith("tool:")
+                and (
+                    getattr(components[k], "name", None) == name
+                    or k.split(":", 1)[1].split("@", 1)[0] == name
+                )
+            ]
             for k in keys:
                 components.pop(k, None)
+
         registered = set(tools_dict.keys())
     else:
+
         def _remove(name):
             tools_dict.pop(name, None)
+
         registered = set(tools_dict.keys())
 
     if explicit_tools:
@@ -274,7 +340,7 @@ def _run_server(
             raise ValueError(f"Invalid transport: {transport}")
 
 
-@click.group()
+@click.group(cls=_LegacyAwareGroup, no_args_is_help=False)
 def main():
     """Windows-MCP: MCP server for Windows desktop automation."""
 
@@ -404,7 +470,25 @@ def main():
     envvar="WINDOWS_MCP_STATELESS_HTTP",
     show_default=True,
 )
-def serve(ctx, transport, host, port, debug, config, auth_key, allow_insecure_remote, ip_allowlist, tools, exclude_tools, cors_origins, ssl_certfile, ssl_keyfile, oauth_client_id, oauth_client_secret, stateless_http):
+def serve(
+    ctx,
+    transport,
+    host,
+    port,
+    debug,
+    config,
+    auth_key,
+    allow_insecure_remote,
+    ip_allowlist,
+    tools,
+    exclude_tools,
+    cors_origins,
+    ssl_certfile,
+    ssl_keyfile,
+    oauth_client_id,
+    oauth_client_secret,
+    stateless_http,
+):
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     if transport == Transport.STDIO.value:
         os.environ.setdefault("NO_COLOR", "1")
@@ -429,25 +513,47 @@ def serve(ctx, transport, host, port, debug, config, auth_key, allow_insecure_re
         _choose_value(ctx, "stateless_http", stateless_http, cfg.server.stateless_http, False)
     )
     allow_insecure_remote = bool(
-        _choose_value(ctx, "allow_insecure_remote", allow_insecure_remote, cfg.server.allow_insecure_remote, False)
+        _choose_value(
+            ctx,
+            "allow_insecure_remote",
+            allow_insecure_remote,
+            cfg.server.allow_insecure_remote,
+            False,
+        )
     )
     ssl_certfile = _choose_value(ctx, "ssl_certfile", ssl_certfile, cfg.server.ssl_certfile, None)
     ssl_keyfile = _choose_value(ctx, "ssl_keyfile", ssl_keyfile, cfg.server.ssl_keyfile, None)
-    oauth_client_id = _choose_value(ctx, "oauth_client_id", oauth_client_id, cfg.security.oauth_client_id, None)
+    oauth_client_id = _choose_value(
+        ctx, "oauth_client_id", oauth_client_id, cfg.security.oauth_client_id, None
+    )
     oauth_client_secret = _choose_value(
         ctx, "oauth_client_secret", oauth_client_secret, cfg.security.oauth_client_secret, None
     )
 
     cli_tools = [t.strip() for t in tools.split(",") if t.strip()] if tools else []
-    cli_exclude = [t.strip() for t in exclude_tools.split(",") if t.strip()] if _param_explicit(ctx, "exclude_tools") and exclude_tools else list(cfg.tools.exclude)
-    cli_allowlist = [e.strip() for e in ip_allowlist.split(",")] if ip_allowlist and _param_explicit(ctx, "ip_allowlist") else cfg.security.ip_allowlist
-    cli_cors = [o.strip() for o in cors_origins.split(",") if o.strip()] if cors_origins and _param_explicit(ctx, "cors_origins") else list(cfg.security.cors_origins)
+    cli_exclude = (
+        [t.strip() for t in exclude_tools.split(",") if t.strip()]
+        if _param_explicit(ctx, "exclude_tools") and exclude_tools
+        else list(cfg.tools.exclude)
+    )
+    cli_allowlist = (
+        [e.strip() for e in ip_allowlist.split(",")]
+        if ip_allowlist and _param_explicit(ctx, "ip_allowlist")
+        else cfg.security.ip_allowlist
+    )
+    cli_cors = (
+        [o.strip() for o in cors_origins.split(",") if o.strip()]
+        if cors_origins and _param_explicit(ctx, "cors_origins")
+        else list(cfg.security.cors_origins)
+    )
 
     if bool(ssl_certfile) != bool(ssl_keyfile):
         raise click.ClickException("--ssl-certfile and --ssl-keyfile must be provided together.")
 
     if bool(oauth_client_id) != bool(oauth_client_secret):
-        raise click.ClickException("OAuth requires both --oauth-client-id and --oauth-client-secret.")
+        raise click.ClickException(
+            "OAuth requires both --oauth-client-id and --oauth-client-secret."
+        )
 
     parsed_allowlist = None
     if cli_allowlist:
@@ -557,11 +663,14 @@ def _gen_tls(host: str, cert_path, key_path) -> None:
         result = subprocess.run(
             [
                 "mkcert",
-                "-cert-file", str(cert_path),
-                "-key-file", str(key_path),
+                "-cert-file",
+                str(cert_path),
+                "-key-file",
+                str(key_path),
                 *sans,
             ],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             raise click.ClickException(f"mkcert failed:\n{result.stderr.strip()}")
@@ -571,18 +680,30 @@ def _gen_tls(host: str, cert_path, key_path) -> None:
         click.echo("  Tip: winget install FiloSottile.mkcert  for auto-trusted certs next time.")
         result = subprocess.run(
             [
-                "openssl", "req", "-x509", "-newkey", "rsa:4096",
-                "-keyout", str(key_path),
-                "-out", str(cert_path),
-                "-days", "365", "-nodes",
-                "-subj", f"/CN={host or 'windows-mcp'}",
+                "openssl",
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:4096",
+                "-keyout",
+                str(key_path),
+                "-out",
+                str(cert_path),
+                "-days",
+                "365",
+                "-nodes",
+                "-subj",
+                f"/CN={host or 'windows-mcp'}",
             ],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             raise click.ClickException(f"openssl failed:\n{result.stderr.strip()}")
         click.echo("  To make Windows trust this cert, run in an elevated PowerShell:")
-        click.echo(f'    Import-Certificate -FilePath "{cert_path}" -CertStoreLocation Cert:\\LocalMachine\\Root')
+        click.echo(
+            f'    Import-Certificate -FilePath "{cert_path}" -CertStoreLocation Cert:\\LocalMachine\\Root'
+        )
 
     click.echo(f"  cert → {cert_path}")
     click.echo(f"  key  → {key_path}")
@@ -612,11 +733,7 @@ def _build_start_script(program_args: list[str]) -> str:
     log_out = CONFIG_DIR / "server.log"
     log_err = CONFIG_DIR / "server.error.log"
     command = subprocess.list2cmdline(program_args)
-    return (
-        "@echo off\n"
-        "setlocal\n"
-        f"{command} 1>>\"{log_out}\" 2>>\"{log_err}\"\n"
-    )
+    return f'@echo off\nsetlocal\n{command} 1>>"{log_out}" 2>>"{log_err}"\n'
 
 
 def _schtasks(*args: str) -> subprocess.CompletedProcess:
@@ -663,11 +780,15 @@ def install(transport: str, host: str, port: int, force: bool) -> None:
         "/F",
     )
     if result.returncode != 0:
-        raise click.ClickException(f"schtasks /Create failed:\n{result.stderr.strip() or result.stdout.strip()}")
+        raise click.ClickException(
+            f"schtasks /Create failed:\n{result.stderr.strip() or result.stdout.strip()}"
+        )
 
     run_result = _schtasks("/Run", "/TN", _TASK_NAME)
     if run_result.returncode != 0:
-        raise click.ClickException(f"schtasks /Run failed:\n{run_result.stderr.strip() or run_result.stdout.strip()}")
+        raise click.ClickException(
+            f"schtasks /Run failed:\n{run_result.stderr.strip() or run_result.stdout.strip()}"
+        )
 
     click.echo("Scheduled task installed — server is starting now.")
     click.echo(f"  Task      : {_TASK_NAME}")
