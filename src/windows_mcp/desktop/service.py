@@ -1,9 +1,8 @@
 from windows_mcp.desktop.utils import (
-    ps_quote,
-    ps_quote_for_xml,
     resolve_known_folder_guid_path,
 )
-from windows_mcp.desktop.powershell import PowerShellExecutor
+from windows_mcp.powershell.utils import ps_quote
+from windows_mcp.powershell import PowerShellExecutor
 from windows_mcp.vdm.core import (
     get_all_desktops,
     get_current_desktop,
@@ -18,7 +17,6 @@ from windows_mcp.desktop import screenshot as screenshot_capture
 from windows_mcp.desktop import flash_overlay
 from windows_mcp.infrastructure import validate_url
 from locale import getpreferredencoding
-from contextlib import contextmanager
 from typing import Literal
 from markdownify import markdownify
 from fuzzywuzzy import process
@@ -296,9 +294,6 @@ class Desktop:
     def get_cursor_location(self) -> tuple[int, int]:
         return uia.GetCursorPos()
 
-    def get_element_under_cursor(self) -> uia.Control:
-        return uia.ControlFromCursor()
-
     def get_apps_from_start_menu(self) -> dict[str, str]:
         """Get installed apps. Tries Get-StartApps first, falls back to shortcut scanning."""
         command = "Get-StartApps | ConvertTo-Csv -NoTypeInformation"
@@ -357,12 +352,6 @@ class Desktop:
             return Browser.has_process(process.name())
         except Exception:
             return False
-
-    def get_default_language(self) -> str:
-        command = "Get-Culture | Select-Object Name,DisplayName | ConvertTo-Csv -NoTypeInformation"
-        response, _ = PowerShellExecutor.execute_command(command)
-        reader = csv.DictReader(io.StringIO(response))
-        return "".join([row.get("DisplayName") for row in reader])
 
     def _find_window_by_name(
         self, name: str, refresh_state: bool = False
@@ -426,11 +415,6 @@ class Desktop:
             width, height = size
             window_control.MoveWindow(x, y, width, height)
             return (f"{target_window.name} resized to {width}x{height} at {x},{y}.", 0)
-
-    def is_app_running(self, name: str) -> bool:
-        windows, _ = self.get_windows()
-        windows_dict = {window.name: window for window in windows}
-        return process.extractOne(name, list(windows_dict.keys()), score_cutoff=60) is not None
 
     def app(
         self,
@@ -779,26 +763,6 @@ class Desktop:
         content = markdownify(html=html)
         return content
 
-    def get_window_from_element(self, element: uia.Control) -> Window | None:
-        if element is None:
-            return None
-        top_window = element.GetTopLevelControl()
-        if top_window is None:
-            return None
-        handle = top_window.NativeWindowHandle
-        windows, _ = self.get_windows()
-        for window in windows:
-            if window.handle == handle:
-                return window
-        return None
-
-    def is_window_visible(self, window: uia.Control) -> bool:
-        is_minimized = self.get_window_status(window) != Status.MINIMIZED
-        size = window.BoundingRectangle
-        area = size.width() * size.height()
-        is_overlay = self.is_overlay_window(window)
-        return not is_overlay and is_minimized and area > 10
-
     def is_overlay_window(self, element: uia.Control) -> bool:
         no_children = len(element.GetChildren()) == 0
         is_name = "Overlay" in element.Name.strip()
@@ -935,64 +899,6 @@ class Desktop:
             logger.error(f"Error in get_windows: {ex}")
             windows = []
         return windows, window_handles
-
-    def get_xpath_from_element(self, element: uia.Control):
-        current = element
-        if current is None:
-            return ""
-        path_parts = []
-        while current is not None:
-            parent = current.GetParentControl()
-            if parent is None:
-                # we are at the root node
-                path_parts.append(f"{current.ControlTypeName}")
-                break
-            children = parent.GetChildren()
-            same_type_children = [
-                "-".join(map(lambda x: str(x), child.GetRuntimeId()))
-                for child in children
-                if child.ControlType == current.ControlType
-            ]
-            index = same_type_children.index(
-                "-".join(map(lambda x: str(x), current.GetRuntimeId()))
-            )
-            if same_type_children:
-                path_parts.append(f"{current.ControlTypeName}[{index + 1}]")
-            else:
-                path_parts.append(f"{current.ControlTypeName}")
-            current = parent
-        path_parts.reverse()
-        xpath = "/".join(path_parts)
-        return xpath
-
-    def get_windows_version(self) -> str:
-        response, status = PowerShellExecutor.execute_command(
-            "(Get-CimInstance Win32_OperatingSystem).Caption"
-        )
-        if status == 0:
-            return response.strip()
-        return "Windows"
-
-    def get_user_account_type(self) -> str:
-        response, status = PowerShellExecutor.execute_command(
-            "(Get-LocalUser -Name $env:USERNAME).PrincipalSource"
-        )
-        return (
-            "Local Account"
-            if response.strip() == "Local"
-            else "Microsoft Account"
-            if status == 0
-            else "Local Account"
-        )
-
-    def get_dpi_scaling(self):
-        try:
-            user32 = ctypes.windll.user32
-            dpi = user32.GetDpiForSystem()
-            return dpi / 96.0 if dpi > 0 else 1.0
-        except Exception:
-            # Fallback to standard DPI if system call fails
-            return 1.0
 
     def get_screen_size(self) -> Size:
         width, height = uia.GetVirtualScreenSize()
@@ -1304,142 +1210,3 @@ class Desktop:
             dom_informative_nodes=tree_state.dom_informative_nodes if filtered_dom_node else [],
             capture_sec=tree_state.capture_sec,
         )
-
-    def send_notification(self, title: str, message: str, app_id: str) -> str:
-        """Send a Windows toast notification with a title and message.
-
-        Args:
-            title: The title of the notification.
-            message: The message of the notification.
-            app_id: The valid Application User Model ID of the toast notification.
-                Required to display the notification in a specific app.
-
-        Returns:
-            A string indicating the result of the notification.
-
-        Notes:
-            The MCP client MUST provide an App ID because Windows uses it as the
-            app identity for desktop toast notifications, and it MUST match a
-            registered shortcut/AppUserModelID.
-        """
-        safe_title = ps_quote_for_xml(title)
-        safe_message = ps_quote_for_xml(message)
-        safe_app_id = ps_quote(app_id)
-
-        ps_script = (
-            "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null\n"
-            "[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null\n"
-            f"$notifTitle = {safe_title}\n"
-            f"$notifMessage = {safe_message}\n"
-            f"$appId = {safe_app_id}\n"
-            '$template = @"\n'
-            "<toast>\n"
-            "    <visual>\n"
-            '        <binding template="ToastGeneric">\n'
-            "            <text>$notifTitle</text>\n"
-            "            <text>$notifMessage</text>\n"
-            "        </binding>\n"
-            "    </visual>\n"
-            "</toast>\n"
-            '"@\n'
-            "$xml = New-Object Windows.Data.Xml.Dom.XmlDocument\n"
-            "$xml.LoadXml($template)\n"
-            "$notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId)\n"
-            "$toast = New-Object Windows.UI.Notifications.ToastNotification $xml\n"
-            "$notifier.Show($toast)"
-        )
-        # Use Windows PowerShell (5.1) explicitly because the WinRT toast APIs are not available in PowerShell 7+ (pwsh).
-        response, status = PowerShellExecutor.execute_command(ps_script, shell="powershell")
-        if status == 0:
-            return f'Notification sent: "{title}" - {message}'
-        else:
-            return f"Notification may have been sent. PowerShell output: {response[:200]}"
-
-    def list_processes(
-        self,
-        name: str | None = None,
-        sort_by: Literal["memory", "cpu", "name"] = "memory",
-        limit: int = 20,
-    ) -> str:
-        import psutil
-        from tabulate import tabulate
-
-        procs = []
-        for p in psutil.process_iter(["pid", "name", "cpu_percent", "memory_info"]):
-            try:
-                info = p.info
-                mem_mb = info["memory_info"].rss / (1024 * 1024) if info["memory_info"] else 0
-                procs.append(
-                    {
-                        "pid": info["pid"],
-                        "name": info["name"] or "Unknown",
-                        "cpu": info["cpu_percent"] or 0,
-                        "mem_mb": round(mem_mb, 1),
-                    }
-                )
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-        if name:
-            from thefuzz import fuzz
-
-            procs = [p for p in procs if fuzz.partial_ratio(name.lower(), p["name"].lower()) > 60]
-        sort_key = {
-            "memory": lambda x: x["mem_mb"],
-            "cpu": lambda x: x["cpu"],
-            "name": lambda x: x["name"].lower(),
-        }
-        procs.sort(key=sort_key.get(sort_by, sort_key["memory"]), reverse=(sort_by != "name"))
-        procs = procs[:limit]
-        if not procs:
-            return f"No processes found{f' matching {name}' if name else ''}."
-        table = tabulate(
-            [[p["pid"], p["name"], f"{p['cpu']:.1f}%", f"{p['mem_mb']:.1f} MB"] for p in procs],
-            headers=["PID", "Name", "CPU%", "Memory"],
-            tablefmt="simple",
-        )
-        return f"Processes ({len(procs)} shown):\n{table}"
-
-    def kill_process(
-        self, name: str | None = None, pid: int | None = None, force: bool = False
-    ) -> str:
-        import psutil
-
-        if pid is None and name is None:
-            return "Error: Provide either pid or name parameter for kill mode."
-        killed = []
-        if pid is not None:
-            try:
-                p = psutil.Process(pid)
-                pname = p.name()
-                if force:
-                    p.kill()
-                else:
-                    p.terminate()
-                killed.append(f"{pname} (PID {pid})")
-            except psutil.NoSuchProcess:
-                return f"No process with PID {pid} found."
-            except psutil.AccessDenied:
-                return f"Access denied to kill PID {pid}. Try running as administrator."
-        else:
-            for p in psutil.process_iter(["pid", "name"]):
-                try:
-                    if p.info["name"] and p.info["name"].lower() == name.lower():
-                        if force:
-                            p.kill()
-                        else:
-                            p.terminate()
-                        killed.append(f"{p.info['name']} (PID {p.info['pid']})")
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-        if not killed:
-            return f'No process matching "{name}" found or access denied.'
-        return f"{'Force killed' if force else 'Terminated'}: {', '.join(killed)}"
-
-    @contextmanager
-    def auto_minimize(self):
-        try:
-            handle = uia.GetForegroundWindow()
-            uia.ShowWindow(handle, win32con.SW_MINIMIZE)
-            yield
-        finally:
-            uia.ShowWindow(handle, win32con.SW_RESTORE)

@@ -1,4 +1,4 @@
-"""Static PowerShell command executor utility."""
+""" PowerShell command executor service """
 
 import base64
 import ctypes
@@ -9,7 +9,10 @@ import winreg
 import shutil
 import subprocess
 
-from windows_mcp.desktop.utils import run_with_graceful_timeout, is_elevated
+from windows_mcp.desktop.utils import is_elevated
+from windows_mcp.powershell.utils import run_with_graceful_timeout
+
+__all__ = ["PowerShellExecutor"]
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +169,7 @@ class PowerShellExecutor:
 
     @staticmethod
     def execute_command(
-        command: str, timeout: int = 10, shell: str | None = None
+            command: str, timeout: int = 10, shell: str | None = None
     ) -> tuple[str, int]:
         try:
             # $OutputEncoding: controls how PS5.1 encodes output written to its stdout pipe.

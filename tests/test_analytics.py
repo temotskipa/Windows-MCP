@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from windows_mcp.analytics import with_analytics
+from windows_mcp.infrastructure import with_analytics
 
 
 class TestWithAnalytics:
