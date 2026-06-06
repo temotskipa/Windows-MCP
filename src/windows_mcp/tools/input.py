@@ -1,5 +1,6 @@
 """Input tools — Click, Type, Scroll, Move, Shortcut, Wait, WaitFor."""
 
+import json
 import time
 from collections.abc import Callable, Iterator
 from typing import Any, Literal
@@ -30,6 +31,17 @@ def _resolve_label(desktop: Any, label: int) -> list[int]:
 
 def _as_bool(value: bool | str) -> bool:
     return value is True or (isinstance(value, str) and value.lower() == "true")
+
+
+def _as_loc(value: list | str | None) -> list | None:
+    """Coerce a JSON-stringified list back to a list.
+
+    Claude Desktop strips anyOf schemas and the model serializes lists as
+    strings (e.g. '[100, 200]'). Parsing here keeps the tools working.
+    """
+    if value is None or isinstance(value, list):
+        return value
+    return json.loads(value)
 
 
 def _text_matches(value: object | None, expected: str | None) -> bool:
@@ -190,13 +202,14 @@ def register(
     )
     @with_analytics(get_analytics(), "Click-Tool")
     def click_tool(
-        loc: list[int] | None = None,
+        loc: list[int] | str | None = None,
         label: int | None = None,
         button: Literal["left", "right", "middle"] = "left",
         clicks: int = 1,
         ctx: Context = None,
     ) -> str:
         desktop = get_desktop()
+        loc = _as_loc(loc)
         if loc is None and label is None:
             raise ValueError("Either loc or label must be provided.")
         if label is not None:
@@ -222,7 +235,7 @@ def register(
     @with_analytics(get_analytics(), "Type-Tool")
     def type_tool(
         text: str,
-        loc: list[int] | None = None,
+        loc: list[int] | str | None = None,
         label: int | None = None,
         clear: bool | str = False,
         caret_position: Literal["start", "idle", "end"] = "idle",
@@ -230,6 +243,7 @@ def register(
         ctx: Context = None,
     ) -> str:
         desktop = get_desktop()
+        loc = _as_loc(loc)
         if loc is None and label is None:
             raise ValueError("Either loc or label must be provided.")
         if label is not None:
@@ -259,7 +273,7 @@ def register(
     )
     @with_analytics(get_analytics(), "Scroll-Tool")
     def scroll_tool(
-        loc: list[int] | None = None,
+        loc: list[int] | str | None = None,
         label: int | None = None,
         type: Literal["horizontal", "vertical"] = "vertical",
         direction: Literal["up", "down", "left", "right"] = "down",
@@ -267,6 +281,7 @@ def register(
         ctx: Context = None,
     ) -> str:
         desktop = get_desktop()
+        loc = _as_loc(loc)
         if label is not None:
             loc = _resolve_label(desktop, label)
         if loc and len(loc) != 2:
@@ -299,12 +314,13 @@ def register(
     )
     @with_analytics(get_analytics(), "Move-Tool")
     def move_tool(
-        loc: list[int] | None = None,
+        loc: list[int] | str | None = None,
         label: int | None = None,
         drag: bool | str = False,
         ctx: Context = None,
     ) -> str:
         desktop = get_desktop()
+        loc = _as_loc(loc)
         drag = drag is True or (isinstance(drag, str) and drag.lower() == "true")
         if loc is None and label is None:
             raise ValueError("Either loc or label must be provided.")
