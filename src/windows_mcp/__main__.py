@@ -30,7 +30,7 @@ import secrets
 import subprocess
 import click
 import os
-import shutil
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -714,19 +714,12 @@ _START_SCRIPT_PATH = CONFIG_DIR / "start-server.cmd"
 
 
 def _resolve_program() -> list[str]:
-    """Return the argv prefix to invoke `windows-mcp serve` from Task Scheduler."""
-    windows_mcp = shutil.which("windows-mcp")
-    if windows_mcp:
-        # Avoid paths inside uv's ephemeral tool cache (uvx runs)
-        if not any(m in windows_mcp for m in (".cache\\uv", ".cache/uv", "uv\\tools", "uv/tools")):
-            return [windows_mcp]
-    uvx = shutil.which("uvx")
-    if uvx:
-        return [uvx, "windows-mcp"]
-    raise click.ClickException(
-        "Cannot find windows-mcp or uvx in PATH.\n"
-        "Install via: pip install windows-mcp  or  winget install astral-sh.uv"
-    )
+    """Return the argv prefix to invoke `windows-mcp serve` from Task Scheduler.
+
+    Uses the running interpreter so the wrapper always targets this exact
+    installation, regardless of what (if anything) is on PATH.
+    """
+    return [sys.executable, "-m", "windows_mcp"]
 
 
 def _build_start_script(program_args: list[str]) -> str:
@@ -738,6 +731,26 @@ def _build_start_script(program_args: list[str]) -> str:
 
 def _schtasks(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["schtasks", *args], capture_output=True, text=True)
+
+
+def _register_task_powershell(task_name: str, script_path: str) -> subprocess.CompletedProcess:
+    """Register an ONLOGON scheduled task via PowerShell at RunLevel Limited.
+
+    Unlike `schtasks /Create /SC ONLOGON`, Register-ScheduledTask with
+    -RunLevel Limited does not require an elevated shell.
+    """
+    ps = (
+        f"$action  = New-ScheduledTaskAction -Execute '{script_path}';"
+        f"$trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME;"
+        f"$set     = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries;"
+        f"Register-ScheduledTask -TaskName '{task_name}' -Action $action"
+        f" -Trigger $trigger -Settings $set -RunLevel Limited -Force"
+    )
+    return subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+        capture_output=True,
+        text=True,
+    )
 
 
 @main.command()
@@ -764,24 +777,14 @@ def install(transport: str, host: str, port: int, force: bool) -> None:
     exe = _resolve_program()
     args = exe + ["serve", "--transport", transport, "--host", host, "--port", str(port)]
     _START_SCRIPT_PATH.write_text(_build_start_script(args), encoding="utf-8")
-    task_command = subprocess.list2cmdline([str(_START_SCRIPT_PATH)])
 
     # Remove any existing task first when forcing a reinstall.
     _schtasks("/Delete", "/TN", _TASK_NAME, "/F")
 
-    result = _schtasks(
-        "/Create",
-        "/SC",
-        "ONLOGON",
-        "/TN",
-        _TASK_NAME,
-        "/TR",
-        task_command,
-        "/F",
-    )
+    result = _register_task_powershell(_TASK_NAME, str(_START_SCRIPT_PATH))
     if result.returncode != 0:
         raise click.ClickException(
-            f"schtasks /Create failed:\n{result.stderr.strip() or result.stdout.strip()}"
+            f"Register-ScheduledTask failed:\n{result.stderr.strip() or result.stdout.strip()}"
         )
 
     run_result = _schtasks("/Run", "/TN", _TASK_NAME)
