@@ -627,7 +627,7 @@ class Desktop:
             results.append((element_node.center.x, element_node.center.y))
         return results
 
-    def click(self, loc: tuple[int, int] | list[int], button: str = "left", clicks: int = 2):
+    def click(self, loc: tuple[int, int] | list[int], button: str = "left", clicks: int = 1):
         if isinstance(loc, list):
             x, y = loc[0], loc[1]
         else:
