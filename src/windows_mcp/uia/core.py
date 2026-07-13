@@ -11,6 +11,7 @@ uiautomation is shared under the Apache Licene 2.0.
 This means that the code can be freely copied and distributed, and costs nothing to use.
 """
 
+import math
 import os
 import sys
 import time
@@ -478,6 +479,27 @@ def MoveTo(x: int, y: int, moveSpeed: float = 1, waitTime: float = OPERATION_WAI
     time.sleep(waitTime)
 
 
+def MoveToDuration(x: int, y: int, duration: float, waitTime: float = OPERATION_WAIT_TIME) -> None:
+    """
+    Simulate mouse move to point x, y over a bounded duration from current cursor.
+    """
+    curX, curY = GetCursorPos()
+    if duration <= 0:
+        SetCursorPos(x, y)
+        time.sleep(waitTime)
+        return
+
+    stepCount = max(2, min(200, math.ceil(duration / 0.01)))
+    interval = duration / stepCount
+    for i in range(1, stepCount + 1):
+        ratio = i / stepCount
+        cx = curX + round((x - curX) * ratio)
+        cy = curY + round((y - curY) * ratio)
+        SetCursorPos(cx, cy)
+        time.sleep(interval)
+    time.sleep(waitTime)
+
+
 def DragDrop(
     x1: int,
     y1: int,
@@ -485,6 +507,7 @@ def DragDrop(
     y2: int,
     moveSpeed: float = 1,
     waitTime: float = OPERATION_WAIT_TIME,
+    duration: float | None = None,
 ) -> None:
     """
     Simulate mouse left button drag from point x1, y1 drop to point x2, y2.
@@ -494,9 +517,20 @@ def DragDrop(
     y2: int.
     moveSpeed: float, 1 normal speed, < 1 move slower, > 1 move faster.
     waitTime: float.
+    duration: optional seconds for bounded intermediate movement.
     """
-    PressMouse(x1, y1, 0.05)
-    MoveTo(x2, y2, moveSpeed, 0.05)
+    try:
+        PressMouse(x1, y1, 0.05)
+        if duration is None:
+            MoveTo(x2, y2, moveSpeed, 0.05)
+        else:
+            MoveToDuration(x2, y2, duration, 0.05)
+    except BaseException as move_error:
+        try:
+            ReleaseMouse(waitTime)
+        except BaseException as release_error:
+            raise release_error from move_error
+        raise
     ReleaseMouse(waitTime)
 
 

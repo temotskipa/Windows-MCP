@@ -23,6 +23,7 @@ from markdownify import markdownify
 from fuzzywuzzy import process
 from time import sleep, time, perf_counter
 from psutil import Process
+import math
 import win32process
 import win32gui
 import win32con
@@ -770,14 +771,52 @@ class Desktop:
                 return 'Invalid type. Use "horizontal" or "vertical".'
         return None
 
-    def drag(self, loc: tuple[int, int] | list[int]):
-        if isinstance(loc, list):
-            x, y = loc[0], loc[1]
-        else:
-            x, y = loc
+    def _normalize_drag_duration(self, duration: float | int | str | None) -> float | None:
+        if duration is None:
+            return None
+        if isinstance(duration, bool):
+            raise ValueError("duration must be a finite number of seconds")
+        try:
+            effective_duration = float(duration)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("duration must be a finite number of seconds") from exc
+        if not math.isfinite(effective_duration):
+            raise ValueError("duration must be a finite number of seconds")
+        if effective_duration < 0 or effective_duration > 10:
+            raise ValueError("duration must be between 0 and 10 seconds")
+        return effective_duration
+
+    @staticmethod
+    def _normalize_drag_point(value: object, name: str) -> tuple[int, int]:
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            raise ValueError(f"{name} must be a list or tuple of exactly 2 integers [x, y]")
+        x, y = value
+        if any(isinstance(item, bool) or not isinstance(item, int) for item in (x, y)):
+            raise ValueError(f"{name} must contain exactly 2 integers")
+        return x, y
+
+    def drag(
+        self,
+        loc: tuple[int, int] | list[int],
+        from_loc: tuple[int, int] | list[int] | None = None,
+        duration: float | int | str | None = None,
+    ) -> dict[str, object]:
+        x, y = self._normalize_drag_point(loc, "loc")
+        normalized_from_loc = (
+            None if from_loc is None else self._normalize_drag_point(from_loc, "from_loc")
+        )
+        effective_duration = self._normalize_drag_duration(duration)
         sleep(0.5)
-        cx, cy = uia.GetCursorPos()
-        uia.DragDrop(cx, cy, x, y, moveSpeed=1)
+        if normalized_from_loc is None:
+            cx, cy = uia.GetCursorPos()
+        else:
+            cx, cy = normalized_from_loc
+        uia.DragDrop(cx, cy, x, y, moveSpeed=1, duration=effective_duration)
+        return {
+            "start": [cx, cy],
+            "end": [x, y],
+            "duration": effective_duration,
+        }
 
     def move(self, loc: tuple[int, int]):
         x, y = loc
@@ -931,7 +970,9 @@ class Desktop:
                 sleep(self._UIA_RETRY_SLEEP_MS / 1000.0)
                 continue
         if last_error is not None:
-            logger.error(f"Error in get_active_window after {self._UIA_RETRIES} retries: {last_error}")
+            logger.error(
+                f"Error in get_active_window after {self._UIA_RETRIES} retries: {last_error}"
+            )
         return None
 
     def get_foreground_window(self) -> uia.Control | None:
